@@ -1,0 +1,5 @@
+# aipooljs
+
+> A tiny, strict object pool for high-frequency acquire/release patterns — PixiJS sprite pools, bullet pools, particle pools, DOM node recyclers, worker job slots. Fixed-size, fail-fast on overflow, double-release detection. Zero runtime dependencies. Part of the ai*js micro-runtime ecosystem.
+
+For the full LLM context (README + CHANGELOG + CONTRIBUTING concatenated), fetch [llms-full.txt](llms-full.txt).
