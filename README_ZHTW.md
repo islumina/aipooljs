@@ -27,7 +27,7 @@
 
 明確**不做**的：不做連線池、不做 thread pool、不做泛用資源管理器。契約就是「固定 buffer + O(1) check-out/check-in 的 plain object」── 故意收窄到 gzip 落在 600 B 上下、認知負擔 < 五分鐘。
 
-> `aipooljs` 是 v0.3 cycle 四個新加入兄弟套件之一 ── 另外三個是 [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs)（空間 broadphase）、`aieventjs`（typed event；**自寫不 fork mitt**，理由見 [LEARNINGS.md 的評估](../LEARNINGS.md)）、`aiaudiojs`（Web Audio 薄殼，底層用 Howler.js 作 `peerDependency`）。
+> `aipooljs` 是 v0.3 cycle 四個新加入兄弟套件之一 ── 另外三個是 [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs)（空間 broadphase）、`aieventjs`（typed event；**自寫不 fork mitt**）、`aiaudiojs`（Web Audio 薄殼，底層用 Howler.js 作 `peerDependency`）。
 
 ---
 

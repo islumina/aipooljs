@@ -27,7 +27,7 @@ Web games and reactive UIs both have hot paths that churn the same shape of obje
 
 What this is **not**: not a connection pool, not a thread pool, not a generic resource manager. The contract is "fixed buffer of plain objects with O(1) check-out/check-in" — narrow on purpose so the gzip stays around 600 B and the cognitive surface stays under five minutes.
 
-> `aipooljs` is one of the four 0.3-cycle siblings joining the family — alongside [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs) (spatial broadphase), `aieventjs` (typed events; self-built, not a `mitt` fork — see the [evaluation in LEARNINGS.md](../LEARNINGS.md)), and `aiaudiojs` (Web Audio shell over a Howler.js `peerDependency`).
+> `aipooljs` is one of the four 0.3-cycle siblings joining the family — alongside [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs) (spatial broadphase), `aieventjs` (typed events; self-built, not a `mitt` fork), and `aiaudiojs` (Web Audio shell over a Howler.js `peerDependency`).
 
 ---
 
