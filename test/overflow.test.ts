@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { PoolDisposedError, PoolError, createPool } from "../src/index.js";
 import type { Pool } from "../src/index.js";
@@ -51,11 +51,13 @@ describe("O. onOverflow", () => {
   it("O4. 'null' type-level: acquire() infers T | null; default pool infers T", () => {
     const nullPool = createPool({ ...makeOpts(2), onOverflow: "null" });
     const defaultPool = createPool(makeOpts(2));
-    // These assignments are the type test — tsc enforces them.
-    const x: Obj | null = nullPool.acquire();
-    const y: Obj = defaultPool.acquire();
-    expect(x).not.toBeNull(); // pool not yet full, returns real object
-    expect(y).toBeDefined();
+    // Use expectTypeOf for exact type enforcement — a plain assignment would pass
+    // even if acquire() were mistakenly narrowed to T (Obj is assignable to Obj|null).
+    expectTypeOf(nullPool.acquire()).toEqualTypeOf<Obj | null>();
+    expectTypeOf(defaultPool.acquire()).toEqualTypeOf<Obj>();
+    // Also verify runtime values while we have the pool open.
+    expect(nullPool.acquire()).not.toBeNull(); // pool not yet full, returns real object
+    expect(defaultPool.acquire()).toBeDefined();
   });
 
   it("O5. 'grow': full pool → create() called capacity more times; alive+available === 2×size", () => {
@@ -163,5 +165,51 @@ describe("O. onOverflow", () => {
     const poolFn = createPool({ ...makeOpts(1), onOverflow: () => ({ value: 0 }) });
     poolFn.dispose();
     expect(() => poolFn.acquire()).toThrow(PoolDisposedError);
+  });
+
+  it("O12. F2 regression: 'grow' is atomic — create() throwing on 2nd allocation leaves pool unchanged", () => {
+    // Pool size=2 exhausted; on grow, create() will throw on the 2nd new allocation.
+    // Before the fix, the 1st newly created object would already be in avail (partial
+    // pollution). After the fix, the temp `grown` array is discarded and avail/capacity
+    // are untouched — alive+available === 2 (the pre-grow total) and the pre-existing
+    // alive objects are still valid.
+    let callCount = 0;
+    const existingObjects: Obj[] = [];
+    const pool = createPool<Obj>({
+      size: 2,
+      create: () => {
+        callCount++;
+        if (callCount === 4) {
+          // callCount 1,2 = initial construction; 3 = 1st grow alloc (ok); 4 = 2nd grow alloc (throw)
+          throw new Error("create failed mid-grow");
+        }
+        const o: Obj = { value: callCount };
+        existingObjects.push(o);
+        return o;
+      },
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: "grow",
+    });
+
+    const [a, b] = [pool.acquire(), pool.acquire()]; // exhaust initial 2
+    expect(pool.alive).toBe(2);
+    expect(pool.available).toBe(0);
+
+    const aliveBeforeGrow = pool.alive;
+    const availableBeforeGrow = pool.available;
+
+    // Trigger grow — should throw mid-grow
+    expect(() => pool.acquire()).toThrow("create failed mid-grow");
+
+    // Invariant: alive+available must equal pre-grow total (no partial slot pollution)
+    expect(pool.alive + pool.available).toBe(aliveBeforeGrow + availableBeforeGrow);
+
+    // Pre-existing alive objects must still be valid (release should not throw)
+    expect(() => pool.release(a)).not.toThrow();
+    expect(() => pool.release(b)).not.toThrow();
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(2);
   });
 });

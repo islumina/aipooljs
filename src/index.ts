@@ -275,7 +275,9 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     if (overflow === "throw") throw new PoolError("pool exhausted");
     if (overflow === "null") return null; // does NOT mutate alive or avail
     if (overflow === "grow") {
-      for (let i = 0; i < capacity; i++) avail.push(create()); // O(capacity) re-alloc
+      const grown: T[] = [];
+      for (let i = 0; i < capacity; i++) grown.push(create()); // O(capacity) re-alloc; atomic
+      for (const o of grown) avail.push(o);
       capacity *= 2;
       return take();
     }
@@ -353,6 +355,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
       return new Promise((resolve, reject) => {
         onAbort = () => reject(abortErr());
         signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) onAbort();
         r.then(resolve, reject);
       }).finally(() => {
         if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);

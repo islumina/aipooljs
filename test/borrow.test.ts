@@ -289,9 +289,11 @@ describe("Br. borrow()", () => {
     expect(pool.available).toBe(1);
   });
 
-  it("Br17. latch false-branch: releaseOnce no-ops when called twice (direct verification)", async () => {
-    // Force the latch false-branch: abort fires and inner also resolves concurrently.
-    // We need both paths to invoke releaseOnce without a double-release PoolError.
+  it("Br17. abort + late-settle does not double-release (latch false-branch is unreachable safeguard under single-.finally design)", async () => {
+    // This test verifies that abort + a late-settling inner promise does not cause
+    // a double-release PoolError. Under the single-.finally design, ro() is invoked
+    // exactly once via .finally; the latch false-branch is a defensive safeguard
+    // that is unreachable in the current implementation, not an exercised code path.
     const opts = makeOpts(2); // size=2 so we can confirm alive stays consistent
     const pool = createPool(opts);
     const ctrl = new AbortController();
@@ -355,5 +357,29 @@ describe("Br. borrow()", () => {
 
     resolveInner();
     await new Promise<void>((r) => setTimeout(r, 0));
+  });
+
+  it("Br19. F1 regression: fn synchronously aborts before its first await → borrow rejects AbortError; slot released immediately", async () => {
+    // Regression for F1: if fn calls ctrl.abort() synchronously (before any await),
+    // the abort event fires before the listener is attached. The immediate-abort guard
+    // (`if (signal.aborted) onAbort()`) ensures the rejection is delivered correctly.
+    const pool = createPool(makeOpts(1));
+    const ctrl = new AbortController();
+
+    const borrowPromise = pool.borrow(
+      async (_obj, _signal) => {
+        // Synchronously abort before any await — signal is aborted before the
+        // addEventListener("abort", ...) listener fires.
+        ctrl.abort();
+        // Now yield; the pool should have already rejected via the guard.
+        await Promise.resolve();
+        return 1;
+      },
+      { signal: ctrl.signal },
+    );
+
+    await expect(borrowPromise).rejects.toMatchObject({ name: "AbortError" });
+    // Slot must be released immediately (not waiting for the inner promise to settle).
+    expect(pool.alive).toBe(0);
   });
 });
