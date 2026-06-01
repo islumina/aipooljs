@@ -24,6 +24,12 @@
  *   `PoolError("foreign or double-released")`. This is an escape hatch; caller
  *   takes full responsibility.
  *
+ *   **Infinite-recursion hazard:** if the function handler calls
+ *   `pool.acquire()` without first making a slot available (e.g. via
+ *   `pool.release()` or `pool.drain()`), `acquire()` will find the pool still
+ *   exhausted, invoke the handler again, and recurse without bound. The handler
+ *   is responsible for ensuring a slot exists before any nested `acquire()` call.
+ *
  * @public
  */
 export type OverflowHandler<T> = "throw" | "null" | "grow" | ((pool: Pool<T>) => T);
@@ -136,6 +142,13 @@ export interface Pool<T> {
    *    since acquired. `fn` must observe `signal.aborted` and stop touching
    *    the object the moment it aborts. Treat the borrowed object as invalid
    *    once `signal` fires.
+   * 7. **Dispose-during-borrow:** if `dispose()` is called while an async
+   *    `borrow` is in flight, the `finally` block runs `release(obj)` after
+   *    the pool is already disposed — `release` throws `PoolDisposedError`,
+   *    which surfaces from the `finally` block and **masks** whatever `fn`
+   *    returned or threw. The caller will always see a `PoolDisposedError` in
+   *    this race, regardless of `fn`'s outcome. This is an explicit invariant:
+   *    do not dispose a pool that has active borrows.
    *
    * **Sync vs async dispatch:** disposed/overflow errors are thrown
    * synchronously (both overloads). A pre-aborted signal yields a rejected

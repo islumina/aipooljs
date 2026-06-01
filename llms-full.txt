@@ -163,6 +163,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Docs
+
+- `src/index.ts` (`borrow` JSDoc): documented **INV7** — dispose-during-borrow
+  invariant. If `dispose()` is called while an async borrow is in-flight, the
+  `finally` block's `release()` throws `PoolDisposedError`, which masks the
+  original `fn` result or error. Explicit guidance: do not dispose a pool that
+  has active borrows.
+- `src/index.ts` (`OverflowHandler` JSDoc): added **infinite-recursion hazard**
+  warning for the function-handler form. Calling `pool.acquire()` from within
+  the handler without first making a slot available causes unbounded recursion;
+  the handler is responsible for ensuring capacity before any nested acquire.
+
+### Tests
+
+- `test/borrow.test.ts` (Br20): regression test locking in INV7 — `dispose()`
+  called while an async borrow is in-flight causes the borrow to reject with
+  `PoolDisposedError` regardless of `fn`'s outcome.
+- `test/property.test.ts` (P1 comment): added note that the `alive + available
+  === size` property holds only under fixed-capacity modes; under `'grow'` the
+  bound is the current (doubled) capacity. See P3.
+- `test/property.test.ts` (P3): new property test for the `'grow'` invariant —
+  across a sequence of grow-triggered acquires, `alive + available` equals the
+  current (doubled) capacity with no phantom slots.
+
 ## [0.4.0] - 2026-05-29
 
 Dependency-hygiene + stability-freeze release, part of the ai\*js family-wide v0.4.0

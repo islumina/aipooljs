@@ -16,6 +16,13 @@ describe("P. Property-based invariants", () => {
   it("P1. alive + available === size throughout any acquire/release/drain sequence", () => {
     // Arbitraries: pool size 1–8; sequence of operations encoded as numbers.
     // 0 = acquire (if pool not full), 1 = release (if alive > 0), 2 = drain.
+    //
+    // NOTE: this property holds for the fixed-capacity overflow modes — 'throw'
+    // (the default) and 'null' (overflow returns null without mutating
+    // alive/available). Under 'grow', the invariant becomes
+    // `alive + available === currentCapacity` (which doubles on each grow event);
+    // the function-handler escape hatch can likewise change capacity. See P3
+    // below for the 'grow' variant.
     const opArb = fc.integer({ min: 0, max: 2 });
     const sizeArb = fc.integer({ min: 1, max: 8 });
 
@@ -72,6 +79,50 @@ describe("P. Property-based invariants", () => {
         expect(() => pool.release(obj)).toThrow(PoolError);
       }),
       { numRuns: 100 },
+    );
+  });
+
+  it("P3. 'grow' invariant: alive + available === currentCapacity (doubles on each grow) — no phantom slots", () => {
+    // Under 'grow', capacity doubles each time the pool is exhausted. After k
+    // grows from an initial size of `s`, currentCapacity === s * 2^k and
+    // alive + available must equal that value with no phantom slots.
+    const sizeArb = fc.integer({ min: 1, max: 4 }); // keep small: each grow doubles
+    const growsArb = fc.integer({ min: 1, max: 3 }); // number of grow events to trigger
+
+    fc.assert(
+      fc.property(sizeArb, growsArb, (initSize, numGrows) => {
+        const pool = createPool<Obj>({
+          size: initSize,
+          create: () => ({ value: 0 }),
+          reset: (o) => {
+            o.value = 0;
+          },
+          onOverflow: "grow",
+        });
+
+        let expectedCapacity = initSize;
+        const held: Obj[] = [];
+
+        for (let g = 0; g < numGrows; g++) {
+          // Exhaust current capacity to trigger the next grow event.
+          while (pool.available > 0) {
+            held.push(pool.acquire());
+          }
+          // One more acquire triggers grow: capacity doubles.
+          held.push(pool.acquire());
+          expectedCapacity *= 2;
+
+          // After each grow event the invariant must hold immediately.
+          expect(pool.alive + pool.available).toBe(expectedCapacity);
+        }
+
+        // Release everything and confirm the invariant still holds.
+        for (const obj of held) pool.release(obj);
+        expect(pool.alive + pool.available).toBe(expectedCapacity);
+        expect(pool.alive).toBe(0);
+        expect(pool.available).toBe(expectedCapacity);
+      }),
+      { numRuns: 50 },
     );
   });
 });

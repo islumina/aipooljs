@@ -382,4 +382,37 @@ describe("Br. borrow()", () => {
     // Slot must be released immediately (not waiting for the inner promise to settle).
     expect(pool.alive).toBe(0);
   });
+
+  it("Br20. INV7 regression: dispose() called while async borrow is in-flight → borrow rejects PoolDisposedError (masks fn result)", async () => {
+    // Documents INV7: when dispose() races an in-flight async borrow, the finally
+    // block's release() throws PoolDisposedError, which surfaces from .finally and
+    // masks whatever fn returned or threw. The caller always sees PoolDisposedError.
+    const pool = createPool(makeOpts(1));
+
+    let resolveInner!: (v: number) => void;
+    const innerDone = new Promise<number>((res) => {
+      resolveInner = res;
+    });
+
+    const borrowPromise = pool.borrow(async (_obj) => {
+      // park until test disposes the pool
+      return await innerDone;
+    });
+
+    // slot is held while fn is parked
+    expect(pool.alive).toBe(1);
+
+    // dispose while borrow is in-flight
+    pool.dispose();
+    expect(pool.disposed).toBe(true);
+
+    // let fn resolve normally — the finally block will attempt release on
+    // the now-disposed pool and throw PoolDisposedError, masking the result
+    resolveInner(42);
+
+    await expect(borrowPromise).rejects.toBeInstanceOf(PoolDisposedError);
+    // pool is disposed; alive/available both 0
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(0);
+  });
 });
