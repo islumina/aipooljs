@@ -163,6 +163,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-02
+
 ### Docs
 
 - `src/index.ts` (`borrow` JSDoc): documented **INV7** — dispose-during-borrow
