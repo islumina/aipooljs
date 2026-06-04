@@ -23,7 +23,7 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 Part of the [ai\*js micro-runtime ecosystem](https://github.com/yshengliao) — see also [aifsmjs](https://github.com/yshengliao/aifsmjs) (FSM), [aiecsjs](https://github.com/yshengliao/aiecsjs) (ECS), [aibridgejs](https://github.com/yshengliao/aibridgejs) (cross-context RPC), [aieventjs](https://github.com/yshengliao/aieventjs) (event emitter), [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs) (spatial partitioning), and [aiaudiojs](https://github.com/yshengliao/aiaudiojs) (Web Audio shell).
 
-> **Status: 0.3.0 published.** API surface is stable; full implementation shipped.
+> **Status: 0.5.1 published.** API surface is stable; full implementation shipped.
 
 ---
 
@@ -409,7 +409,7 @@ license that covers this project.
 - `OverflowHandler<T>` / `NullPool<T>`
 - `acquire` / `release` / `drain` / `dispose` / `alive` / `available` / `disposed`
 - `onOverflow`: `'throw'` | `'null'` | `'grow'` | `(pool) => T`
-- `borrow(fn, opts?)` — see 6 invariants below
+- `borrow(fn, opts?)` — see 7 invariants below
 
 ### borrow invariants
 
@@ -426,6 +426,10 @@ license that covers this project.
    If `fn` keeps touching the borrowed object after abort, it may mutate an object another caller
    has since acquired. `fn` must observe `signal.aborted` and stop touching the object the moment
    it aborts. Treat the borrowed object as invalid once `signal` fires.
+7. **Dispose-during-borrow:** if `dispose()` is called while an async borrow is in-flight, the
+   `finally` block's `release()` throws `PoolDisposedError`, which masks whatever `fn` returned
+   or threw. The caller will always see `PoolDisposedError` in this race. Do not dispose a pool
+   that has active borrows.
 
 ## Experimental / Draft
 

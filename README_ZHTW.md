@@ -10,7 +10,7 @@
 
 隸屬 [ai\*js micro-runtime 生態系](https://github.com/yshengliao) ─ 另見 [aifsmjs](https://github.com/yshengliao/aifsmjs)（FSM）、[aiecsjs](https://github.com/yshengliao/aiecsjs)（ECS）、[aibridgejs](https://github.com/yshengliao/aibridgejs)（cross-context RPC）、[aieventjs](https://github.com/yshengliao/aieventjs)（event emitter）、[aiquadtreejs](https://github.com/yshengliao/aiquadtreejs)（空間分割）、[aiaudiojs](https://github.com/yshengliao/aiaudiojs)（Web Audio 薄殼）。
 
-> **狀態：0.3.0 published。** API surface 穩定；完整實作已上線。
+> **狀態：0.5.1 published。** API surface 穩定；完整實作已上線。
 
 ---
 

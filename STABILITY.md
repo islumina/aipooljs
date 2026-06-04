@@ -11,7 +11,7 @@
 - `OverflowHandler<T>` / `NullPool<T>`
 - `acquire` / `release` / `drain` / `dispose` / `alive` / `available` / `disposed`
 - `onOverflow`: `'throw'` | `'null'` | `'grow'` | `(pool) => T`
-- `borrow(fn, opts?)` — see 6 invariants below
+- `borrow(fn, opts?)` — see 7 invariants below
 
 ### borrow invariants
 
@@ -28,6 +28,10 @@
    If `fn` keeps touching the borrowed object after abort, it may mutate an object another caller
    has since acquired. `fn` must observe `signal.aborted` and stop touching the object the moment
    it aborts. Treat the borrowed object as invalid once `signal` fires.
+7. **Dispose-during-borrow:** if `dispose()` is called while an async borrow is in-flight, the
+   `finally` block's `release()` throws `PoolDisposedError`, which masks whatever `fn` returned
+   or threw. The caller will always see `PoolDisposedError` in this race. Do not dispose a pool
+   that has active borrows.
 
 ## Experimental / Draft
 

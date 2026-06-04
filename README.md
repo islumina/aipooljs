@@ -10,7 +10,7 @@
 
 Part of the [ai\*js micro-runtime ecosystem](https://github.com/yshengliao) — see also [aifsmjs](https://github.com/yshengliao/aifsmjs) (FSM), [aiecsjs](https://github.com/yshengliao/aiecsjs) (ECS), [aibridgejs](https://github.com/yshengliao/aibridgejs) (cross-context RPC), [aieventjs](https://github.com/yshengliao/aieventjs) (event emitter), [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs) (spatial partitioning), and [aiaudiojs](https://github.com/yshengliao/aiaudiojs) (Web Audio shell).
 
-> **Status: 0.3.0 published.** API surface is stable; full implementation shipped.
+> **Status: 0.5.1 published.** API surface is stable; full implementation shipped.
 
 ---
 
