@@ -1,6 +1,6 @@
 {
   "name": "aipooljs",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Tiny, strict object pool for high-frequency acquire/release patterns — PixiJS sprite pools, bullet pools, particle pools, DOM node recyclers, worker job slots. Fixed-size, fail-fast on overflow, double-release detection.",
   "keywords": [
     "object-pool",
