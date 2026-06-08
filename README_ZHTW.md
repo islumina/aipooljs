@@ -1,14 +1,14 @@
 # aipooljs
 
 [![npm version](https://img.shields.io/npm/v/aipooljs.svg)](https://www.npmjs.com/package/aipooljs)
-[![CI](https://github.com/yshengliao/aipooljs/actions/workflows/ci.yml/badge.svg)](https://github.com/yshengliao/aipooljs/actions/workflows/ci.yml)
+[![CI](https://github.com/islumina/aipooljs/actions/workflows/ci.yml/badge.svg)](https://github.com/islumina/aipooljs/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![AI Generated](https://img.shields.io/badge/AI_Generated-Claude_Code_Opus_4.7_Max-blueviolet.svg)](https://www.anthropic.com/claude-code)
 [![English](https://img.shields.io/badge/lang-English-blue.svg)](README.md)
 
 > 一個小而嚴格的物件池，給高頻 `acquire()` / `release()` 場景使用 ── PixiJS Sprite pool、子彈池、粒子池、DOM node 回收器、Worker job slot。預設 fixed-size、溢位即拋、可偵測重複 release。
 
-隸屬 [ai\*js micro-runtime 生態系](https://github.com/yshengliao) ─ 另見 [aifsmjs](https://github.com/yshengliao/aifsmjs)（FSM）、[aiecsjs](https://github.com/yshengliao/aiecsjs)（ECS）、[aibridgejs](https://github.com/yshengliao/aibridgejs)（cross-context RPC）、[aieventjs](https://github.com/yshengliao/aieventjs)（event emitter）、[aiquadtreejs](https://github.com/yshengliao/aiquadtreejs)（空間分割）、[aiaudiojs](https://github.com/yshengliao/aiaudiojs)（Web Audio 薄殼）。
+隸屬 [ai\*js micro-runtime 生態系](https://github.com/islumina) ─ 另見 [aifsmjs](https://github.com/islumina/aifsmjs)（FSM）、[aiecsjs](https://github.com/islumina/aiecsjs)（ECS）、[aibridgejs](https://github.com/islumina/aibridgejs)（cross-context RPC）、[aieventjs](https://github.com/islumina/aieventjs)（event emitter）、[aiquadtreejs](https://github.com/islumina/aiquadtreejs)（空間分割）、[aiaudiojs](https://github.com/islumina/aiaudiojs)（Web Audio 薄殼）。
 
 > **狀態：0.5.1 published。** API surface 穩定；完整實作已上線。
 
@@ -27,7 +27,7 @@
 
 明確**不做**的：不做連線池、不做 thread pool、不做泛用資源管理器。契約就是「固定 buffer + O(1) check-out/check-in 的 plain object」── 故意收窄到 gzip 落在 600 B 上下、認知負擔 < 五分鐘。
 
-> `aipooljs` 是 v0.3 cycle 四個新加入兄弟套件之一 ── 另外三個是 [aiquadtreejs](https://github.com/yshengliao/aiquadtreejs)（空間 broadphase）、`aieventjs`（typed event；**自寫不 fork mitt**）、`aiaudiojs`（Web Audio 薄殼，底層用 Howler.js 作 `peerDependency`）。
+> `aipooljs` 是 v0.3 cycle 四個新加入兄弟套件之一 ── 另外三個是 [aiquadtreejs](https://github.com/islumina/aiquadtreejs)（空間 broadphase）、`aieventjs`（typed event；**自寫不 fork mitt**）、`aiaudiojs`（Web Audio 薄殼，底層用 Howler.js 作 `peerDependency`）。
 
 ---
 
