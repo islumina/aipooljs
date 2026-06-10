@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-06-10
+
+### Fixed
+
+- **Overflow handler alias guard** — a function `onOverflow` handler that returns an object currently sitting in the available stack (the `release(victim); return victim` shape) now throws `PoolError` instead of silently handing the same object to two callers, which corrupted the avail∩alive disjointness invariant. (Review wave 2026-06-10, POL-B-01.)
+- `onOverflow` is validated at construction: a typo'd string (e.g. `"gorw"`) throws `PoolError` immediately instead of a deferred `TypeError` on the first mid-frame overflow. (POL-S-02.)
+- `size: 0` with `onOverflow: 'grow'` now grows (by at least one slot) instead of throwing `pool exhausted` forever (`0 * 2 = 0`). (POL-R-02.)
+
+### Changed
+
+- Supply-chain and release hardening: CI/publish actions SHA-pinned, npm CLI pinned (`11.16.0`) in the OIDC publish job, `permissions: contents: read` on CI, job timeouts, tag↔package.json version guard, `npm publish --ignore-scripts`, manual dispatch defaults to dry-run, and a new `verify:docs` banner gate. Size budget 900 → 950 B gzip (+70 B of validation code, leader-ratified).
+
+### Docs
+
+- README status banners refreshed (EN + ZHTW, mixed-language line normalised); throwing-`reset()` slot-loss failure mode documented in JSDoc + STABILITY.md; literal-only `onOverflow` overload-narrowing limitation documented.
+
 ## [0.5.5] - 2026-06-08
 
 ### Changed
