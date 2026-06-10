@@ -383,6 +383,61 @@ describe("Br. borrow()", () => {
     expect(pool.alive).toBe(0);
   });
 
+  it("Br20a [POL-T-03] borrow × function handler: handler-supplied object auto-released via finally; joins pool as new slot", async () => {
+    // Trace: borrow on exhausted pool → function handler runs → handler returns fresh
+    // object → alive.add(fresh) → borrow fn runs with fresh → finally releases fresh
+    // → fresh enters avail (pool grows by 1 permanently).
+    const fresh: Obj = { value: 55 };
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: () => fresh,
+    });
+    pool.acquire(); // exhaust initial slot; 1 alive, 0 available
+
+    const result = await pool.borrow(async (obj) => {
+      expect(obj).toBe(fresh); // handler-supplied object handed to borrow fn
+      return obj.value;
+    });
+
+    expect(result).toBe(55);
+    // After borrow completes: initial slot still alive, fresh was released into avail
+    // Pool has grown: alive=1, available=1 (total=2)
+    expect(pool.alive).toBe(1);
+    expect(pool.available).toBe(1);
+  });
+
+  it("Br21 [POL-T-03] borrow × function handler: each overflow-borrow of a fresh object permanently grows alive+available by 1", async () => {
+    // Documents the quiet unbounded-growth path: each overflow-borrow of a fresh
+    // object permanently adds a slot (total alive+available grows by 1 per event).
+    //
+    // Protocol: exhaust all available slots before each borrow so the overflow
+    // handler fires. After each borrow the fresh object is in avail; we immediately
+    // acquire it to re-exhaust, keeping available=0 for the next iteration.
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: () => ({ value: 0 }),
+    });
+    pool.acquire(); // exhaust initial slot; alive=1, available=0
+
+    for (let i = 1; i <= 3; i++) {
+      // Pool is exhausted here: available=0, alive=i
+      const totalBefore = pool.alive + pool.available; // = i
+      await pool.borrow(async (_obj) => i);
+      // After borrow: fresh object released into avail; alive+available = i+1
+      expect(pool.alive + pool.available).toBe(totalBefore + 1);
+      // Re-acquire the new avail slot to exhaust for the next iteration
+      pool.acquire();
+    }
+  });
+
   it("Br20. INV7 regression: dispose() called while async borrow is in-flight → borrow rejects PoolDisposedError (masks fn result)", async () => {
     // Documents INV7: when dispose() races an in-flight async borrow, the finally
     // block's release() throws PoolDisposedError, which surfaces from .finally and

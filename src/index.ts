@@ -57,6 +57,13 @@ export interface PoolOptions<T> {
    * loop megamorphic.
    *
    * Prefer `obj.x = 0; obj.visible = false;` over `delete obj.x`.
+   *
+   * **Throwing reset permanently shrinks the pool (POL-R-01):**
+   * `release()` and `drain()` both delete the object from the alive set
+   * _before_ calling `reset()`. If `reset()` throws, the object is left in
+   * neither the alive set nor the available stack — `alive + available` drops
+   * below `size` permanently for that slot. This behaviour is intentional and
+   * test-locked; guard `reset()` with a try/catch if slot loss is unacceptable.
    */
   reset: (obj: T) => void;
 
@@ -213,6 +220,15 @@ export class PoolDisposedError extends Error {
  * Construct a fixed-size object pool configured to return `null` on overflow
  * (instead of throwing). The returned {@link NullPool} has `acquire(): T | null`.
  *
+ * **Overload narrowing is literal-only (POL-B-02):** this overload matches only
+ * when `onOverflow` is the string literal `"null"` — i.e. when TypeScript can
+ * see the value at the call site. If you build a config object dynamically
+ * (`const cfg = { ..., onOverflow: userSetting }`), the type of `onOverflow`
+ * widens to `OverflowHandler<T>`, which matches the base `Pool<T>` overload
+ * instead. In that case `acquire()` is typed as `T` even though it may return
+ * `null` at runtime. Use `as const satisfies PoolOptions<T>` or an explicit
+ * type cast to preserve the narrowing.
+ *
  * @public
  */
 export function createPool<T>(opts: PoolOptions<T> & { onOverflow: "null" }): NullPool<T>;
@@ -258,7 +274,18 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   const overflow = opts.onOverflow ?? "throw";
 
   if (!Number.isInteger(size) || size < 0) {
-    throw new PoolError("size must be a non-negative integer");
+    throw new PoolError("aipooljs: size must be a non-negative integer");
+  }
+
+  // POL-S-02: validate onOverflow at construction time so a typo'd string throws
+  // immediately rather than deferring a TypeError to first overflow mid-frame.
+  if (
+    typeof overflow !== "function" &&
+    overflow !== "throw" &&
+    overflow !== "null" &&
+    overflow !== "grow"
+  ) {
+    throw new PoolError("aipooljs: invalid onOverflow");
   }
 
   const avail: T[] = [];
@@ -288,14 +315,22 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     if (overflow === "throw") throw new PoolError("pool exhausted");
     if (overflow === "null") return null; // does NOT mutate alive or avail
     if (overflow === "grow") {
+      // POL-R-02: size:0 would give 0*2=0 forever; grow by at least 1.
+      const growBy = capacity || 1;
       const grown: T[] = [];
-      for (let i = 0; i < capacity; i++) grown.push(create()); // O(capacity) re-alloc; atomic
+      for (let i = 0; i < growBy; i++) grown.push(create()); // O(capacity) re-alloc; atomic
       for (const o of grown) avail.push(o);
-      capacity *= 2;
+      capacity = growBy * 2;
       return take();
     }
-    // function handler
+    // function handler — POL-B-01: reject if handler returned an object already in avail
+    // (release-then-return "evict oldest" misuse corrupts avail∩alive disjointness invariant).
+    // This is a cold overflow path; linear scan of avail is acceptable per design contract.
     const obj = overflow(self as Pool<T>);
+    if (avail.includes(obj)) {
+      // POL-B-01: release-then-return corrupts avail∩alive disjointness invariant.
+      throw new PoolError("aipooljs: overflow handler returned an available object");
+    }
     alive.add(obj);
     return obj;
   }

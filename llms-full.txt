@@ -23,7 +23,7 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 Part of the [ai\*js micro-runtime ecosystem](https://github.com/islumina) — see also [aifsmjs](https://github.com/islumina/aifsmjs) (FSM), [aiecsjs](https://github.com/islumina/aiecsjs) (ECS), [aibridgejs](https://github.com/islumina/aibridgejs) (cross-context RPC), [aieventjs](https://github.com/islumina/aieventjs) (event emitter), [aiquadtreejs](https://github.com/islumina/aiquadtreejs) (spatial partitioning), and [aiaudiojs](https://github.com/islumina/aiaudiojs) (Web Audio shell).
 
-> **Status: 0.5.1 published.** API surface is stable; full implementation shipped.
+> **Status: 0.5.5.** API surface is stable; full implementation shipped.
 
 ---
 
@@ -422,6 +422,16 @@ license that covers this project.
 - `acquire` / `release` / `drain` / `dispose` / `alive` / `available` / `disposed`
 - `onOverflow`: `'throw'` | `'null'` | `'grow'` | `(pool) => T`
 - `borrow(fn, opts?)` — see 7 invariants below
+
+### reset() failure contract
+
+**A throwing `reset()` permanently removes its slot from the pool.** The implementation
+deletes the object from the alive set before calling `reset()`. If `reset()` throws, the
+object is never pushed back to available — `alive + available` is permanently less than
+the original `size` for that slot. This applies to both the `release()` path and the
+`drain()` path (which iterates and calls `reset()` for each alive object). The behaviour
+is intentional and test-locked (tests C5 / D5 / Br13 / Br14). Guard `reset()` with a
+`try/catch` if you need slot-loss prevention.
 
 ### borrow invariants
 

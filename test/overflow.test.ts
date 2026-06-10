@@ -167,6 +167,105 @@ describe("O. onOverflow", () => {
     expect(() => poolFn.acquire()).toThrow(PoolDisposedError);
   });
 
+  // -------------------------------------------------------------------------
+  // RED tests for wave 2026-06-10 — uncomment after fixes applied
+  // -------------------------------------------------------------------------
+
+  it("O13 [POL-S-02] onOverflow typo at construction → throws PoolError immediately (not deferred TypeError)", () => {
+    // Before fix: createPool with onOverflow:"gorw" succeeds; TypeError only on
+    // first overflow. After fix: construction throws PoolError right away.
+    expect(() =>
+      createPool({
+        ...makeOpts(1),
+        onOverflow: "gorw" as unknown as "grow",
+      }),
+    ).toThrow(PoolError);
+  });
+
+  it("O14 [POL-S-02] PoolError message contains 'aipooljs:' prefix", () => {
+    expect(() =>
+      createPool({
+        ...makeOpts(1),
+        onOverflow: "typo" as unknown as "throw",
+      }),
+    ).toThrow(/^aipooljs:/);
+  });
+
+  it("O15 [POL-R-02] size:0 + onOverflow:'grow' → acquire succeeds (pool grows from 0)", () => {
+    // Before fix: 0 * 2 = 0, loop runs 0 times, take() hits empty-stack guard and throws.
+    // After fix: Math.max(capacity, 1) ensures at least 1 object is created on first grow.
+    const pool = createPool({ ...makeOpts(0), onOverflow: "grow" });
+    expect(() => pool.acquire()).not.toThrow();
+    expect(pool.alive).toBe(1);
+    expect(pool.available).toBe(0); // grew by max(0,1)=1; one acquired
+  });
+
+  it("O16 [POL-B-01] handler that release(victim)+return victim → throws PoolError (avail∩alive disjointness)", () => {
+    // Before fix: victim ends up in both avail and alive; second acquire() gets the
+    // same aliased object silently.
+    // After fix: the overflow path detects victim is already in avail and throws.
+    //
+    // The "evict oldest" misuse shape: handler calls pool.release(victim) to free the
+    // slot, then returns the same victim — so victim is in avail when alive.add runs.
+    //
+    // Use a ref object to avoid `let captured!` (Biome useConst false-positive on
+    // the definite-assignment pattern).
+    const ref = { captured: null as unknown as Obj };
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: (p) => {
+        // Release the already-alive object back to avail, then return it.
+        // `ref.captured` is the object taken by the first acquire() below.
+        p.release(ref.captured); // ref.captured → avail
+        return ref.captured; // returns object now in avail: must throw PoolError
+      },
+    });
+
+    ref.captured = pool.acquire(); // exhaust pool; ref.captured is alive
+    // overflow fires: handler release(ref.captured) → in avail, then return same
+    // → our guard detects avail.includes(ref.captured) and throws PoolError
+    expect(() => pool.acquire()).toThrow(PoolError);
+  });
+
+  it("O17 [POL-B-01] handler release(victim)+return victim — PoolError message has 'aipooljs:' prefix", () => {
+    const ref = { captured: null as unknown as Obj };
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: (p) => {
+        p.release(ref.captured);
+        return ref.captured;
+      },
+    });
+    ref.captured = pool.acquire();
+    expect(() => pool.acquire()).toThrow(/^aipooljs:/);
+  });
+
+  it("O18 [POL-B-01] sibling disjointness: second acquire after aliasing handler returns fresh object (no alias)", () => {
+    // After the fix, a handler that returns an avail-resident object throws; a handler
+    // returning a fresh object (correct usage) must still work as before (O8 shape).
+    const fresh: Obj = { value: 77 };
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: () => fresh,
+    });
+    pool.acquire();
+    const result = pool.acquire(); // handler returns fresh object not in avail
+    expect(result).toBe(fresh);
+    expect(pool.alive).toBe(2);
+  });
+
   it("O12. F2 regression: 'grow' is atomic — create() throwing on 2nd allocation leaves pool unchanged", () => {
     // Pool size=2 exhausted; on grow, create() will throw on the 2nd new allocation.
     // Before the fix, the 1st newly created object would already be in avail (partial
@@ -211,5 +310,24 @@ describe("O. onOverflow", () => {
     expect(() => pool.release(b)).not.toThrow();
     expect(pool.alive).toBe(0);
     expect(pool.available).toBe(2);
+  });
+
+  it("O19 [POL-T-02] infinite-recursion hazard pin: handler that re-entrantly calls acquire() on exhausted pool → throws RangeError (stack overflow)", () => {
+    // The JSDoc (src/index.ts:27–31) documents this hazard as contract.
+    // This test pins that a handler calling acquire() without first freeing a slot
+    // causes the documented RangeError, so a future refactor cannot silently change it.
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: (o) => {
+        o.value = 0;
+      },
+      onOverflow: (p) => {
+        // Re-entrantly acquires without releasing → infinite recursion.
+        return p.acquire() as Obj;
+      },
+    });
+    pool.acquire(); // exhaust
+    expect(() => pool.acquire()).toThrow(RangeError);
   });
 });

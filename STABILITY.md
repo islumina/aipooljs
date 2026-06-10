@@ -13,6 +13,16 @@
 - `onOverflow`: `'throw'` | `'null'` | `'grow'` | `(pool) => T`
 - `borrow(fn, opts?)` — see 7 invariants below
 
+### reset() failure contract
+
+**A throwing `reset()` permanently removes its slot from the pool.** The implementation
+deletes the object from the alive set before calling `reset()`. If `reset()` throws, the
+object is never pushed back to available — `alive + available` is permanently less than
+the original `size` for that slot. This applies to both the `release()` path and the
+`drain()` path (which iterates and calls `reset()` for each alive object). The behaviour
+is intentional and test-locked (tests C5 / D5 / Br13 / Br14). Guard `reset()` with a
+`try/catch` if you need slot-loss prevention.
+
 ### borrow invariants
 
 1. `release(obj)` is guaranteed to run in `finally` — on sync throw, async reject, and abort alike.
