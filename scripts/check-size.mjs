@@ -18,7 +18,11 @@ const budgets = {
   //   NullPool / Omit / overloads are types-only — 0 runtime bytes.
   // v0.3.1: budget raised from 850 B to 900 B to accommodate F1/F2 correctness
   // fixes (immediate-abort guard + atomic grow temp array); messages retained.
-  "dist/index.js": 900,
+  // wave 2026-06-10: 900 B -> 950 B (leader-ratified). +70 B gzip measured
+  // (869 -> 939 B): POL-S-02 onOverflow construction validation, POL-B-01
+  // avail-membership guard on the cold overflow path, POL-R-02 grow-from-zero.
+  // Error messages already minimal; ~11 B margin keeps the creep gate tight.
+  "dist/index.js": 950,
 };
 
 const failures = [];
