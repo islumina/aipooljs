@@ -280,14 +280,12 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   // POL-S-02: validate onOverflow at construction time so a typo'd string throws
   // immediately rather than deferring a TypeError to first overflow mid-frame.
   if (
+    typeof overflow !== "function" &&
     overflow !== "throw" &&
     overflow !== "null" &&
-    overflow !== "grow" &&
-    typeof overflow !== "function"
+    overflow !== "grow"
   ) {
-    throw new PoolError(
-      `aipooljs: invalid onOverflow value "${String(overflow)}" — expected "throw", "null", "grow", or a function`,
-    );
+    throw new PoolError("aipooljs: invalid onOverflow");
   }
 
   const avail: T[] = [];
@@ -318,7 +316,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     if (overflow === "null") return null; // does NOT mutate alive or avail
     if (overflow === "grow") {
       // POL-R-02: size:0 would give 0*2=0 forever; grow by at least 1.
-      const growBy = Math.max(capacity, 1);
+      const growBy = capacity || 1;
       const grown: T[] = [];
       for (let i = 0; i < growBy; i++) grown.push(create()); // O(capacity) re-alloc; atomic
       for (const o of grown) avail.push(o);
@@ -330,10 +328,8 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     // This is a cold overflow path; linear scan of avail is acceptable per design contract.
     const obj = overflow(self as Pool<T>);
     if (avail.includes(obj)) {
-      throw new PoolError(
-        "aipooljs: overflow handler returned an object that is already in the available set — " +
-          "release-then-return corrupts pool invariants; do not release and return the same object",
-      );
+      // POL-B-01: release-then-return corrupts avail∩alive disjointness invariant.
+      throw new PoolError("aipooljs: overflow handler returned an available object");
     }
     alive.add(obj);
     return obj;

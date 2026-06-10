@@ -207,7 +207,10 @@ describe("O. onOverflow", () => {
     //
     // The "evict oldest" misuse shape: handler calls pool.release(victim) to free the
     // slot, then returns the same victim — so victim is in avail when alive.add runs.
-    let captured!: Obj;
+    //
+    // Use a ref object to avoid `let captured!` (Biome useConst false-positive on
+    // the definite-assignment pattern).
+    const ref = { captured: null as unknown as Obj };
     const pool = createPool<Obj>({
       size: 1,
       create: () => ({ value: 0 }),
@@ -216,20 +219,20 @@ describe("O. onOverflow", () => {
       },
       onOverflow: (p) => {
         // Release the already-alive object back to avail, then return it.
-        // `captured` is the object taken by the first acquire() below.
-        p.release(captured); // captured → avail
-        return captured;     // returns object now in avail: must throw PoolError
+        // `ref.captured` is the object taken by the first acquire() below.
+        p.release(ref.captured); // ref.captured → avail
+        return ref.captured; // returns object now in avail: must throw PoolError
       },
     });
 
-    captured = pool.acquire(); // exhaust pool; captured is alive
-    // overflow fires: handler release(captured) → captured in avail, then return captured
-    // → our guard detects avail.includes(captured) and throws PoolError
+    ref.captured = pool.acquire(); // exhaust pool; ref.captured is alive
+    // overflow fires: handler release(ref.captured) → in avail, then return same
+    // → our guard detects avail.includes(ref.captured) and throws PoolError
     expect(() => pool.acquire()).toThrow(PoolError);
   });
 
   it("O17 [POL-B-01] handler release(victim)+return victim — PoolError message has 'aipooljs:' prefix", () => {
-    let captured!: Obj;
+    const ref = { captured: null as unknown as Obj };
     const pool = createPool<Obj>({
       size: 1,
       create: () => ({ value: 0 }),
@@ -237,11 +240,11 @@ describe("O. onOverflow", () => {
         o.value = 0;
       },
       onOverflow: (p) => {
-        p.release(captured);
-        return captured;
+        p.release(ref.captured);
+        return ref.captured;
       },
     });
-    captured = pool.acquire();
+    ref.captured = pool.acquire();
     expect(() => pool.acquire()).toThrow(/^aipooljs:/);
   });
 
