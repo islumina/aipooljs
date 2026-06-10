@@ -204,6 +204,10 @@ describe("O. onOverflow", () => {
     // Before fix: victim ends up in both avail and alive; second acquire() gets the
     // same aliased object silently.
     // After fix: the overflow path detects victim is already in avail and throws.
+    //
+    // The "evict oldest" misuse shape: handler calls pool.release(victim) to free the
+    // slot, then returns the same victim — so victim is in avail when alive.add runs.
+    let captured!: Obj;
     const pool = createPool<Obj>({
       size: 1,
       create: () => ({ value: 0 }),
@@ -211,27 +215,21 @@ describe("O. onOverflow", () => {
         o.value = 0;
       },
       onOverflow: (p) => {
-        // Classic "evict oldest" misuse: release the single alive object, then
-        // return it — corrupts avail∩alive invariant.
-        const victim = p.acquire() as Obj; // no-op in overflow context; just to get ref
-        // Actually we need to grab the already-alive object.
-        // Use drain to push it back to avail, then return it from handler.
-        p.drain(); // victim → avail
-        return victim; // handler returns object that is now in avail
+        // Release the already-alive object back to avail, then return it.
+        // `captured` is the object taken by the first acquire() below.
+        p.release(captured); // captured → avail
+        return captured;     // returns object now in avail: must throw PoolError
       },
     });
 
-    const victim = pool.acquire();
-    // After drain in handler, victim is in avail AND handler returns it.
-    // This should throw PoolError now (not silently alias).
+    captured = pool.acquire(); // exhaust pool; captured is alive
+    // overflow fires: handler release(captured) → captured in avail, then return captured
+    // → our guard detects avail.includes(captured) and throws PoolError
     expect(() => pool.acquire()).toThrow(PoolError);
-    // pool state must not be corrupted — victim should still be cleanly releasable
-    // (it was drained back to avail by the handler's drain() call)
-    void victim;
   });
 
   it("O17 [POL-B-01] handler release(victim)+return victim — PoolError message has 'aipooljs:' prefix", () => {
-    let victim!: Obj;
+    let captured!: Obj;
     const pool = createPool<Obj>({
       size: 1,
       create: () => ({ value: 0 }),
@@ -239,11 +237,11 @@ describe("O. onOverflow", () => {
         o.value = 0;
       },
       onOverflow: (p) => {
-        p.drain();
-        return victim;
+        p.release(captured);
+        return captured;
       },
     });
-    victim = pool.acquire();
+    captured = pool.acquire();
     expect(() => pool.acquire()).toThrow(/^aipooljs:/);
   });
 
