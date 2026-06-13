@@ -1,53 +1,26 @@
 # Stability
 
-## Stable (since 0.3.0)
+## Stable Surface
 
-> **1.0-track frozen (since 0.4.0).** Every entry below is frozen for the 1.x line:
-> no signature, return-type, error `name`/`code`, or default-behaviour change will land
-> before 1.0, and these APIs are guaranteed stable across 1.x once 1.0 ships. Additive
-> growth (new optional options / new exports) remains possible.
+| Surface | Status | Notes |
+| --- | --- | --- |
+| `createPool()` | Stable | Fixed-size pool factory with overload for `"null"`. |
+| `Pool` methods | Stable | `acquire`, `release`, `drain`, `borrow`, `dispose`. |
+| Runtime state | Stable | `available`, `alive`, `disposed`. |
+| Overflow strategies | Stable | `"throw"`, `"null"`, `"grow"`, function handler. |
+| Error classes | Stable | `PoolError`, `PoolDisposedError`. |
 
-- `createPool` / `PoolOptions` / `Pool` / `PoolError` / `PoolDisposedError`
-- `OverflowHandler<T>` / `NullPool<T>`
-- `acquire` / `release` / `drain` / `dispose` / `alive` / `available` / `disposed`
-- `onOverflow`: `'throw'` | `'null'` | `'grow'` | `(pool) => T`
-- `borrow(fn, opts?)` — see 7 invariants below
+## Behavioral Contract
 
-### reset() failure contract
+- Objects are created eagerly at construction.
+- `release()` detects foreign/double release.
+- `drain()` resets every live object.
+- `dispose()` is idempotent and permanent.
+- `borrow()` releases in `finally` for sync throw, async rejection, and abort paths.
 
-**A throwing `reset()` permanently removes its slot from the pool.** The implementation
-deletes the object from the alive set before calling `reset()`. If `reset()` throws, the
-object is never pushed back to available — `alive + available` is permanently less than
-the original `size` for that slot. This applies to both the `release()` path and the
-`drain()` path (which iterates and calls `reset()` for each alive object). The behaviour
-is intentional and test-locked (tests C5 / D5 / Br13 / Br14). Guard `reset()` with a
-`try/catch` if you need slot-loss prevention.
+## Caveats
 
-### borrow invariants
-
-1. `release(obj)` is guaranteed to run in `finally` — on sync throw, async reject, and abort alike.
-2. `signal` abort → slot released immediately, promise rejects with `signal.reason` (default:
-   `AbortError` DOMException). If the signal is already aborted before `borrow` is called, the
-   promise rejects without acquiring or executing `fn`.
-3. `borrow` does **not** cancel `fn`'s inner async work; `signal` is an advisory token only.
-4. If the pool is disposed, `borrow` throws `PoolDisposedError` synchronously, before `acquire`.
-5. If `onOverflow` is `'null'` and the pool is full, `borrow` throws `PoolError` synchronously;
-   `fn` is never called.
-6. **Abort does not fence inner work.** When `signal` aborts, `borrow` releases the slot and
-   rejects immediately. It does **not** cancel the work inside `fn` — the signal is advisory.
-   If `fn` keeps touching the borrowed object after abort, it may mutate an object another caller
-   has since acquired. `fn` must observe `signal.aborted` and stop touching the object the moment
-   it aborts. Treat the borrowed object as invalid once `signal` fires.
-7. **Dispose-during-borrow:** if `dispose()` is called while an async borrow is in-flight, the
-   `finally` block's `release()` throws `PoolDisposedError`, which masks whatever `fn` returned
-   or threw. The caller will always see `PoolDisposedError` in this race. Do not dispose a pool
-   that has active borrows.
-
-## Experimental / Draft
-
-### polymorphic-chunked-pool (draft) — Target: v0.6+
-
-One contiguous `ArrayBuffer` partitioned into typed sub-pools (`Bullet | Particle | Explosion`).
-Reduces header overhead from N × `Pool<T>` to 1 buffer + N offset tables.
-
-Risk: API complexity; schema versioning across pool resize. Not implemented this cycle.
+- Throwing `reset()` permanently removes that slot from the pool.
+- Function overflow handlers are caller-owned escape hatches and may alias live objects if misused.
+- Abort does not cancel the work inside `borrow()`.
+- `"grow"` trades correctness for allocation spikes; use intentionally.

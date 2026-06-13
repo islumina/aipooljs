@@ -13,143 +13,83 @@ The short index lives at `llms.txt` (see https://llmstxt.org/).
 
 # aipooljs
 
-[![npm version](https://img.shields.io/npm/v/aipooljs.svg)](https://www.npmjs.com/package/aipooljs)
-[![CI](https://github.com/islumina/aipooljs/actions/workflows/ci.yml/badge.svg)](https://github.com/islumina/aipooljs/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
-[![AI Generated](https://img.shields.io/badge/AI_Generated-Claude_Code_Opus_4.7_Max-blueviolet.svg)](https://www.anthropic.com/claude-code)
-[![繁體中文](https://img.shields.io/badge/lang-繁體中文-red.svg)](README_ZHTW.md)
+Tiny strict object pool for hot acquire/release paths: sprites, bullets, particles, DOM nodes, and worker slots.
 
-> A tiny, strict object pool for high-frequency `acquire()` / `release()` patterns — PixiJS Sprite pools, bullet pools, particle pools, DOM node recyclers, worker job slots. Fixed-size by default; fail-fast on overflow; double-release detection.
+> **Status: 0.5.6 - stable 1.0-track surface.** The root entry is the public API.
 
-Part of the [ai\*js micro-runtime ecosystem](https://github.com/islumina) — see also [aifsmjs](https://github.com/islumina/aifsmjs) (FSM), [aiecsjs](https://github.com/islumina/aiecsjs) (ECS), [aibridgejs](https://github.com/islumina/aibridgejs) (cross-context RPC), [aieventjs](https://github.com/islumina/aieventjs) (event emitter), [aiquadtreejs](https://github.com/islumina/aiquadtreejs) (spatial partitioning), and [aiaudiojs](https://github.com/islumina/aiaudiojs) (Web Audio shell).
-
-> **Status: 0.5.6.** API surface is stable; full implementation shipped.
-
----
-
-## Why aipooljs
-
-Web games and reactive UIs both have hot paths that churn the same shape of object many times per second: bullets fired and recycled, particles spawned and faded, list rows mounted and unmounted, worker jobs queued and drained. Letting V8's GC chase that churn produces stutter you can see — frame-time spikes where the major GC walks the heap. An object pool replaces that churn with a fixed buffer and constant-time slot reuse, which is exactly what the hot path needs.
-
-`aipooljs` is the smallest pool API that gets the four things right:
-
-- **Constant-time `acquire` / `release`** — backed by an internal stack (`push` / `pop` on a JS array), both are O(1). `Array.shift()` is O(n) and is the most common reason hand-rolled pools regress.
-- **V8-friendly reset semantics** — the `reset(obj)` hook must clear fields by assignment, never by `delete`. Deletion demotes hidden classes and turns the steady-state loop megamorphic; the JSDoc states this explicitly so AI agents and humans converge on the same rule.
-- **Double-release detection** — releasing the same object twice silently corrupts the available set and is the canonical pool bug. `aipooljs` tracks the alive set with a `Set` and throws `PoolError` on the second release.
-- **Fixed size, fail-fast on overflow** — auto-grow makes the pool's worst-case unpredictable (a single big allocation can stutter the same frame the pool was supposed to protect). Overflow throws so you fix the upstream rate, not the pool.
-
-What this is **not**: not a connection pool, not a thread pool, not a generic resource manager. The contract is "fixed buffer of plain objects with O(1) check-out/check-in" — narrow on purpose so the gzip stays around 600 B and the cognitive surface stays under five minutes.
-
-> `aipooljs` is one of the four 0.3-cycle siblings joining the family — alongside [aiquadtreejs](https://github.com/islumina/aiquadtreejs) (spatial broadphase), `aieventjs` (typed events; self-built, not a `mitt` fork), and `aiaudiojs` (Web Audio shell over a Howler.js `peerDependency`).
-
----
-
-## Quick Start
+## Install
 
 ```bash
 pnpm add aipooljs
 ```
 
-```typescript
+```ts
 import { createPool } from "aipooljs";
+```
 
-// 1. Pre-allocate a fixed-size buffer.
-const sprites = createPool({
-  create: () => new PIXI.Sprite(bulletTexture),
-  reset: (s) => {
-    s.visible = false;
-    s.x = 0;
-    s.y = 0;
-    s.alpha = 1;
+## Quick Start
+
+```ts
+const bullets = createPool({
+  size: 256,
+  create: () => ({ x: 0, y: 0, active: false }),
+  reset: (b) => {
+    b.x = 0;
+    b.y = 0;
+    b.active = false;
   },
-  size: 200,
 });
 
-// 2. Acquire in the hot path.
-function fireBullet(x: number, y: number) {
-  const s = sprites.acquire();   // O(1), no allocation
-  s.visible = true;
-  s.x = x;
-  s.y = y;
-  stage.addChild(s);
-  return s;
-}
+const bullet = bullets.acquire();
+bullet.active = true;
+bullets.release(bullet);
 
-// 3. Release when the entity dies.
-function reclaim(s: PIXI.Sprite) {
-  s.parent?.removeChild(s);
-  sprites.release(s);            // O(1), reset() runs first
-}
+await bullets.borrow(async (slot) => {
+  slot.active = true;
+});
+
+bullets.dispose();
 ```
 
-The contract is deliberately narrow. There's no async constructor and no priority queue; auto-grow is opt-in via `onOverflow: 'grow'`, never the default — the rest belongs in user-land when actually needed.
+## Core API
 
----
+- `createPool({ size, create, reset, onOverflow? })` builds a fixed-size pool.
+- `pool.acquire()` returns a live slot or follows `onOverflow`.
+- `pool.release(obj)` resets and returns a live slot.
+- `pool.drain()` releases all currently live slots.
+- `pool.borrow(fn, { signal }?)` acquires, runs `fn`, and releases in `finally`.
+- `pool.dispose()` is idempotent permanent teardown.
+- Read-only state: `available`, `alive`, `disposed`.
+- Errors: `PoolError`, `PoolDisposedError`.
 
-## Capabilities / Limitations
+## Overflow Strategies
 
-| Will do (v1)                                              | Won't do                                              |
-| --------------------------------------------------------- | ----------------------------------------------------- |
-| Fixed-size pre-allocation; opt-in auto-grow via `onOverflow: 'grow'` | Auto-grow by default (overflow throws `PoolError`; opt-in via `onOverflow`) |
-| O(1) `acquire()` / `release()`; `drain()` is O(alive)     | Async object construction                             |
-| Reset hook (V8-friendly: assign, never `delete`)          | Silent double-release (throws in all modes)           |
-| `alive` / `available` / `disposed` read-only counters     | Connection pool / thread pool / DB pool               |
-| `dispose()` idempotent; post-dispose calls throw          | Weak references (pool is intentionally strong-ref)    |
-| Foreign-object release detection                          | Per-object metadata / generation counters             |
+| Strategy | Behavior |
+| --- | --- |
+| `"throw"` | Default; throws `PoolError` when empty. |
+| `"null"` | `acquire()` returns `null`; factory overload narrows the pool type. |
+| `"grow"` | Allocates more objects and doubles capacity; can cause same-frame GC spikes. |
+| function | Escape hatch. The handler returns a slot and is responsible for avoiding aliasing/recursion. |
 
----
+## Sharp Edges
 
-## API sketch
+- Function overflow handlers can return an already-live object. That aliases the previous holder and can make later `release()` calls throw.
+- If `reset()` throws, the slot is removed from alive before it returns to available, so capacity shrinks permanently for that object.
+- `borrow()` only takes the async branch when `fn` returns a native `Promise`. Non-`instanceof Promise` thenables are treated as sync: the slot is released immediately and the thenable is returned as-is. Prefer real `Promise`s.
+- Aborting `borrow()` releases the slot but does not stop inner work. If the pool is disposed during async borrow, the result is reported through the disposed path.
+- Do not `delete` fields in `reset()` on hot objects; assign default values to preserve hidden classes.
 
-```typescript
-type OverflowHandler<T> = 'throw' | 'null' | 'grow' | ((pool: Pool<T>) => T);
+## AI Context
 
-interface PoolOptions<T> {
-  create: () => T;
-  reset: (obj: T) => void;
-  size: number;
-  onOverflow?: OverflowHandler<T>; // default: 'throw'
-}
-
-interface Pool<T> {
-  acquire(): T;
-  release(obj: T): void;
-  drain(): void;
-  dispose(): void;
-  borrow<R>(fn: (obj: T) => R): R;
-  borrow<R>(fn: (obj: T, signal?: AbortSignal) => Promise<R>, opts?: { signal?: AbortSignal }): Promise<R>;
-  readonly alive: number;
-  readonly available: number;
-  readonly disposed: boolean;
-}
-
-// 'null' mode: acquire() returns T | null instead of throwing on overflow
-interface NullPool<T> extends Omit<Pool<T>, 'acquire'> { acquire(): T | null; }
-
-class PoolError extends Error { /* overflow / double-release / foreign object */ }
-class PoolDisposedError extends Error { /* any call after dispose */ }
-
-function createPool<T>(opts: PoolOptions<T> & { onOverflow: 'null' }): NullPool<T>;
-function createPool<T>(opts: PoolOptions<T>): Pool<T>;
-```
-
-Full JSDoc lives in [`src/index.ts`](src/index.ts).
-
----
-
-## Roadmap
-
-| Version    | Adds                                                                                                                                |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **0.1.0**  | `createPool`, `acquire` / `release` / `drain` / `dispose`, double-release detection, error classes, ≥95% coverage, ≤700 B gzip (strict-TS overhead lands at ~557 B). |
-| **0.3.0**  | `onOverflow` option (`'throw'` / `'null'` / `'grow'` / function handler); `borrow(fn, opts?)` helper with `AbortSignal` support; `STABILITY.md`; budget raised to 850 B. |
-| **0.6+**   | TBD — driven by real integration feedback (e.g. polymorphic chunked pool, batch acquire, generation counters for stale checks). |
-
----
+- Short index: [`llms.txt`](llms.txt)
+- Full generated context: [`llms-full.txt`](llms-full.txt)
+- Stability contract: [`STABILITY.md`](STABILITY.md)
+- Current review backlog: [`REVIEW.md`](REVIEW.md)
+- Release history: [`CHANGELOG.md`](CHANGELOG.md)
 
 ## License
 
-[MIT](LICENSE).
+MIT
 
 ---
 
@@ -157,189 +97,24 @@ Full JSDoc lives in [`src/index.ts`](src/index.ts).
 
 # Changelog
 
-All notable changes to this project are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to aipooljs are summarized here.
 
 ## [Unreleased]
 
+- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context.
+- Known follow-up: consider whether a stricter overflow handler mode should prevent aliasing by default.
+
 ## [0.5.6] - 2026-06-10
 
-### Fixed
+- Hardened docs around overflow, reset failure, borrow abort, and dispose behavior.
+- Kept fixed-size pool API stable and regenerated generated LLM context.
 
-- **Overflow handler alias guard** — a function `onOverflow` handler that returns an object currently sitting in the available stack (the `release(victim); return victim` shape) now throws `PoolError` instead of silently handing the same object to two callers, which corrupted the avail∩alive disjointness invariant. (Review wave 2026-06-10, POL-B-01.)
-- `onOverflow` is validated at construction: a typo'd string (e.g. `"gorw"`) throws `PoolError` immediately instead of a deferred `TypeError` on the first mid-frame overflow. (POL-S-02.)
-- `size: 0` with `onOverflow: 'grow'` now grows (by at least one slot) instead of throwing `pool exhausted` forever (`0 * 2 = 0`). (POL-R-02.)
+## Older releases
 
-### Changed
-
-- Supply-chain and release hardening: CI/publish actions SHA-pinned, npm CLI pinned (`11.16.0`) in the OIDC publish job, `permissions: contents: read` on CI, job timeouts, tag↔package.json version guard, `npm publish --ignore-scripts`, manual dispatch defaults to dry-run, and a new `verify:docs` banner gate. Size budget 900 → 950 B gzip (+70 B of validation code, leader-ratified).
-
-### Docs
-
-- README status banners refreshed (EN + ZHTW, mixed-language line normalised); throwing-`reset()` slot-loss failure mode documented in JSDoc + STABILITY.md; literal-only `onOverflow` overload-narrowing limitation documented.
-
-## [0.5.5] - 2026-06-08
-
-### Changed
-
-- Project home migrated to the [`islumina`](https://github.com/islumina) GitHub org; the package is now published from there via npm trusted publisher (OIDC + SLSA provenance). Family-wide version alignment at `0.5.5` — no runtime or API changes.
-
-## [0.5.2] - 2026-06-05
-
-### Docs
-
-- Review-driven documentation fixes (`README.md`, `README_ZHTW.md`, `llms-full.txt`; plus repo-only `STABILITY.md`): clarity and accuracy from a cross-package code review. No runtime or API change; `dist` byte-identical to 0.5.1.
-
-## [0.5.1] - 2026-06-02
-
-### Docs
-
-- `src/index.ts` (`borrow` JSDoc): documented **INV7** — dispose-during-borrow
-  invariant. If `dispose()` is called while an async borrow is in-flight, the
-  `finally` block's `release()` throws `PoolDisposedError`, which masks the
-  original `fn` result or error. Explicit guidance: do not dispose a pool that
-  has active borrows.
-- `src/index.ts` (`OverflowHandler` JSDoc): added **infinite-recursion hazard**
-  warning for the function-handler form. Calling `pool.acquire()` from within
-  the handler without first making a slot available causes unbounded recursion;
-  the handler is responsible for ensuring capacity before any nested acquire.
-
-### Tests
-
-- `test/borrow.test.ts` (Br20): regression test locking in INV7 — `dispose()`
-  called while an async borrow is in-flight causes the borrow to reject with
-  `PoolDisposedError` regardless of `fn`'s outcome.
-- `test/property.test.ts` (P1 comment): added note that the `alive + available
-  === size` property holds only under fixed-capacity modes; under `'grow'` the
-  bound is the current (doubled) capacity. See P3.
-- `test/property.test.ts` (P3): new property test for the `'grow'` invariant —
-  across a sequence of grow-triggered acquires, `alive + available` equals the
-  current (doubled) capacity with no phantom slots.
-
-## [0.4.0] - 2026-05-29
-
-Dependency-hygiene + stability-freeze release, part of the ai\*js family-wide v0.4.0
-dependency-reduction cycle. **No runtime API addition.** Production bundles are
-byte-identical to 0.3.1 (`dist/index.js` 869 B gzip); the public surface is unchanged.
-
-### Changed
-
-- **Removed unused `tsx` devDependency.** `depcheck` confirmed `tsx` was not referenced
-  by any script, config, or source file. `pnpm-lock.yaml` is pruned accordingly — smaller
-  install graph and reduced CI supply-chain surface. Runtime/peer dependencies remain zero.
-
-### Docs
-
-- `STABILITY.md`: the 0.3.x stable surface (`createPool` / `PoolOptions` / `Pool` /
-  `NullPool` / `OverflowHandler` / `PoolError` / `PoolDisposedError` / `onOverflow` /
-  `borrow` + its 6 invariants) is now declared **1.0-track frozen** — these signatures
-  will not change before 1.0 and are guaranteed stable across the 1.x line once 1.0 ships.
-  The polymorphic-chunked-pool remains a draft (target v0.6+).
-
-### Notes
-
-- `pnpm audit` clean — no transitive advisories.
-- Backward-compatible minor: no exports removed, no signatures changed, no error
-  `name`/`code` changes, no default-behaviour changes.
-
-## [0.3.1] - 2026-05-29
-
-### Fixed
-
-- **F1 — borrow synchronous-abort during fn:** if `fn` calls `signal.abort()` synchronously
-  before its first `await`, the `abort` event fires before the `addEventListener("abort", …)`
-  listener is attached, causing the rejection to be silently dropped. A post-attach
-  `if (signal.aborted) onAbort()` guard now catches this case, ensuring the borrow rejects
-  with `AbortError` and the slot is released immediately (not deferred until `fn` settles).
-- **F2 — 'grow' is now atomic on `create()` failure:** the grow loop previously pushed
-  each newly created object straight into `avail`, so a mid-grow `create()` throw left
-  partial slots committed (breaking the `alive + available === size` invariant). The loop
-  now builds into a temporary `grown: T[]` array and only commits to `avail` and
-  `capacity` once all allocations succeed.
-
-### Changed
-
-- Size budget `dist/index.js`: 850 B → 900 B (accommodates F1/F2 correctness fixes;
-  error-message strings retained — no golfing).
-
-### Docs
-
-- `STABILITY.md`: added `OverflowHandler<T>` and `NullPool<T>` to the Stable section
-  (both were already exported and documented in 0.3.0; the omission was an oversight).
-- `CONTRIBUTING.md`: updated stale "≤ 500 B gzip" / "past 500 B" guidance to "≤ 900 B".
-
-## [0.3.0] - 2026-05-29
-
-### Added
-
-- `onOverflow` option (`'throw' | 'null' | 'grow' | (pool) => T`) on `PoolOptions<T>`. Default
-  remains `'throw'` — fully backward-compatible.
-- `NullPool<T>` interface and overloaded `createPool` factory: `onOverflow: 'null'` narrows
-  `acquire()` return type to `T | null` at compile time.
-- `OverflowHandler<T>` type exported.
-- `borrow(fn, opts?)` helper on `Pool<T>`: auto-releases via `try/finally`, with opt-in
-  `AbortSignal` cancellation. Sync and async `fn` both supported. Six stability invariants
-  documented in `STABILITY.md`.
-- `STABILITY.md` — stable API surface + borrow invariants + polymorphic-chunked-pool draft
-  placeholder.
-
-### Changed
-
-- Size budget `dist/index.js`: 700 B → 850 B (accounts for `onOverflow` dispatch + `borrow`
-  async/abort machinery).
-
-### Docs
-
-- README roadmap: `borrow` + `onOverflow` moved from the never-shipped 0.2.0 row to **0.3.0**.
-- README status line: "0.1.0 published" → "0.3.0 published".
-- README Capabilities table: "Auto-grow (overflow throws PoolError)" updated to reflect opt-in
-  `onOverflow` (`'grow'` available; default still throws).
-- `STABILITY.md` added to `llms-full.txt` via `scripts/build-llms-full.mjs`.
-
-## [0.1.1] - 2026-05-28
-
-### Changed (CI)
-
-- **`publish.yml` now triggers on `push: tags: ["v*"]`** (was `workflow_dispatch` only). Aligns with the trigger used by `aifsmjs` / `aiecsjs` / `aibridgejs`. Tag push now automatically runs the OIDC trusted publish.
-- **`npm publish --provenance --access public`** — the workflow now emits a [sigstore provenance attestation](https://docs.npmjs.com/generating-provenance-statements) so consumers can verify the tarball was built by this workflow on this commit.
-
-No runtime / source / API changes. This is a CI-only patch to validate the GitHub Actions OIDC trusted-publisher pipeline now that the npm trusted publisher entry is configured. Production bundles are byte-identical to 0.1.0.
-
-## [0.1.0] - 2026-05-28
-
-### Added
-
-- `createPool({ create, reset, size })` factory — fixed-size, fail-fast on overflow.
-- `acquire()` / `release()` / `drain()` / `dispose()` lifecycle.
-- Double-release detection via `Set`-tracked alive set; offending `release()` throws `PoolError`.
-- `dispose()` is idempotent; subsequent `acquire()` / `release()` / `drain()` throw `PoolDisposedError`.
-- `alive` / `available` / `disposed` read-only counters.
-- Test coverage ≥95% statements / lines / functions / ≥90% branches.
-- Size budget: ≤500 B gzip (raised to 700 B if strict-TS overhead pushes past 500 B).
-- Dual ESM + CJS build via `tsup` with `minify: true`; `sideEffects: false`; zero runtime dependencies.
-
-## [0.0.1] - 2026-05-28
-
-### Added (scaffold)
-
-- Full package scaffold landed (`package.json`, `tsconfig.json`,
-  `tsconfig.test.json`, `tsup.config.ts`, `vitest.config.ts`, `biome.json`,
-  `scripts/{verify-exports,check-size,build-llms-full}.mjs`,
-  `test/scaffold.test.ts`, `examples/.gitkeep`, `.github/workflows/{ci,publish}.yml`,
-  `llms.txt`, `llms-full.txt`).
-- `src/index.ts` remains a `throw` stub exposing the frozen 0.1.0 API surface
-  (`createPool`, `Pool<T>`, `PoolOptions<T>`, `PoolError`, `PoolDisposedError`).
-- `pnpm typecheck && pnpm lint && pnpm coverage && pnpm build &&
-  pnpm verify:exports && pnpm verify:llms && pnpm check:size` walks clean
-  against a single placeholder test.
-- Coverage thresholds temporarily set to `0/0/0/0`; tightened to
-  `95/90/100/100` in 0.1.0 with real tests.
-- Size budget temporarily set to 3 KB gzip; tightened to the 500 B README
-  target in 0.1.0.
-- Publish workflow exists but trigger is `workflow_dispatch` only — no
-  accidental npm release on tag push until 0.1.0.
-
+- `0.5.5` through `0.5.1` focused on release hygiene, docs accuracy, and regression tests for reset/borrow/overflow paths.
+- `0.4.0` declared the stable ai*js pool surface.
+- `0.3.x` added overflow strategies and `borrow()`.
+- `0.1.x` introduced `createPool`, `Pool`, `NullPool`, `PoolError`, and `PoolDisposedError`.
 
 ---
 
@@ -347,78 +122,32 @@ No runtime / source / API changes. This is a CI-only patch to validate the GitHu
 
 # Contributing to aipooljs
 
-Thanks for taking the time to look. aipooljs is a deliberately small library
-(target ≤ 900 B gzip); contributions that keep the surface narrow are easier
-to accept than ones that expand it.
+Keep the pool predictable, allocation-aware, and explicit about sharp edges.
 
-## Quick start
+## Local workflow
 
 ```bash
 pnpm install
-pnpm test            # vitest
-pnpm coverage        # vitest with v0.1.0 thresholds (95/90/100/100)
-pnpm typecheck       # tsc --noEmit on strict mode
-pnpm lint            # biome check
-pnpm build           # tsup; dual ESM/CJS + .d.ts
-pnpm verify:exports  # ensures package.json#exports matches dist/
-pnpm verify:llms     # ensures llms-full.txt is in sync with README + CHANGELOG
-pnpm check:size      # gzip per subpath against the size budget
+pnpm typecheck
+pnpm test
+pnpm verify:docs
+pnpm build:llms
+pnpm verify:llms
+pnpm check:size
 ```
 
-The full pre-publish gate is `pnpm prepublishOnly`, which runs typecheck,
-lint, coverage (with thresholds), build, exports verification, llms drift
-check, and size budget check — in that order.
+Run `pnpm lint` before PRs. If docs change, regenerate `llms-full.txt`.
 
-## What gets in easily
+## Rules
 
-- Bug fixes with a failing test added first
-- README / typing corrections
-- Tests that lock down existing behaviour
-- Performance work that keeps `acquire()` / `release()` at O(1) and zero
-  allocation in steady state
-
-## What needs discussion first
-
-- Anything that changes the public surface (`createPool`, `Pool<T>`,
-  `PoolOptions<T>`, error classes)
-- Auto-grow / shrink semantics (explicit non-goal in 0.x)
-- Async object construction (explicit non-goal in 0.x)
-- Generation counters or stale-handle detection (0.3+ candidate)
-- Anything that pushes the core gzip past 900 B
-
-## Design principles
-
-aipooljs follows the ai*js library-core priority order:
-
-> Security > Correctness > Simplicity > YAGNI > Performance
-
-Key invariants:
-
-- `acquire()` / `release()` are O(1); no allocations in steady state.
-- `reset(obj)` must clear by assignment, never `delete` (V8 hidden-class
-  preservation is the whole point).
-- Double-release throws; silent corruption of the available set is never an
-  acceptable outcome.
-- `dispose()` is idempotent.
-
-## Commit & PR style
-
-- Commit messages: imperative subject under 70 chars; body explains *why*.
-- PRs: keep scope to one topic. Link the issue if any.
-- Tests required for any behaviour change. Property-based tests welcome
-  for invariants; example tests preferred for behaviour you want documented.
-
-## Reporting issues
-
-- Minimal reproduction welcome (paste the smallest `createPool` + acquire /
-  release sequence that shows the bug).
-- For security issues, please email the maintainer rather than filing
-  publicly.
+- Preserve double-release and foreign-object detection.
+- Add tests for overflow, reset throw, borrow abort, async borrow, and dispose paths.
+- Do not hide allocation behavior behind friendly defaults.
+- Keep examples hot-path friendly: reset fields, do not delete them.
 
 ## License
 
-By contributing, you agree your changes will be licensed under the MIT
-license that covers this project.
+MIT
 
 ---
 
@@ -426,56 +155,29 @@ license that covers this project.
 
 # Stability
 
-## Stable (since 0.3.0)
+## Stable Surface
 
-> **1.0-track frozen (since 0.4.0).** Every entry below is frozen for the 1.x line:
-> no signature, return-type, error `name`/`code`, or default-behaviour change will land
-> before 1.0, and these APIs are guaranteed stable across 1.x once 1.0 ships. Additive
-> growth (new optional options / new exports) remains possible.
+| Surface | Status | Notes |
+| --- | --- | --- |
+| `createPool()` | Stable | Fixed-size pool factory with overload for `"null"`. |
+| `Pool` methods | Stable | `acquire`, `release`, `drain`, `borrow`, `dispose`. |
+| Runtime state | Stable | `available`, `alive`, `disposed`. |
+| Overflow strategies | Stable | `"throw"`, `"null"`, `"grow"`, function handler. |
+| Error classes | Stable | `PoolError`, `PoolDisposedError`. |
 
-- `createPool` / `PoolOptions` / `Pool` / `PoolError` / `PoolDisposedError`
-- `OverflowHandler<T>` / `NullPool<T>`
-- `acquire` / `release` / `drain` / `dispose` / `alive` / `available` / `disposed`
-- `onOverflow`: `'throw'` | `'null'` | `'grow'` | `(pool) => T`
-- `borrow(fn, opts?)` — see 7 invariants below
+## Behavioral Contract
 
-### reset() failure contract
+- Objects are created eagerly at construction.
+- `release()` detects foreign/double release.
+- `drain()` resets every live object.
+- `dispose()` is idempotent and permanent.
+- `borrow()` releases in `finally` for sync throw, async rejection, and abort paths.
 
-**A throwing `reset()` permanently removes its slot from the pool.** The implementation
-deletes the object from the alive set before calling `reset()`. If `reset()` throws, the
-object is never pushed back to available — `alive + available` is permanently less than
-the original `size` for that slot. This applies to both the `release()` path and the
-`drain()` path (which iterates and calls `reset()` for each alive object). The behaviour
-is intentional and test-locked (tests C5 / D5 / Br13 / Br14). Guard `reset()` with a
-`try/catch` if you need slot-loss prevention.
+## Caveats
 
-### borrow invariants
-
-1. `release(obj)` is guaranteed to run in `finally` — on sync throw, async reject, and abort alike.
-2. `signal` abort → slot released immediately, promise rejects with `signal.reason` (default:
-   `AbortError` DOMException). If the signal is already aborted before `borrow` is called, the
-   promise rejects without acquiring or executing `fn`.
-3. `borrow` does **not** cancel `fn`'s inner async work; `signal` is an advisory token only.
-4. If the pool is disposed, `borrow` throws `PoolDisposedError` synchronously, before `acquire`.
-5. If `onOverflow` is `'null'` and the pool is full, `borrow` throws `PoolError` synchronously;
-   `fn` is never called.
-6. **Abort does not fence inner work.** When `signal` aborts, `borrow` releases the slot and
-   rejects immediately. It does **not** cancel the work inside `fn` — the signal is advisory.
-   If `fn` keeps touching the borrowed object after abort, it may mutate an object another caller
-   has since acquired. `fn` must observe `signal.aborted` and stop touching the object the moment
-   it aborts. Treat the borrowed object as invalid once `signal` fires.
-7. **Dispose-during-borrow:** if `dispose()` is called while an async borrow is in-flight, the
-   `finally` block's `release()` throws `PoolDisposedError`, which masks whatever `fn` returned
-   or threw. The caller will always see `PoolDisposedError` in this race. Do not dispose a pool
-   that has active borrows.
-
-## Experimental / Draft
-
-### polymorphic-chunked-pool (draft) — Target: v0.6+
-
-One contiguous `ArrayBuffer` partitioned into typed sub-pools (`Bullet | Particle | Explosion`).
-Reduces header overhead from N × `Pool<T>` to 1 buffer + N offset tables.
-
-Risk: API complexity; schema versioning across pool resize. Not implemented this cycle.
+- Throwing `reset()` permanently removes that slot from the pool.
+- Function overflow handlers are caller-owned escape hatches and may alias live objects if misused.
+- Abort does not cancel the work inside `borrow()`.
+- `"grow"` trades correctness for allocation spikes; use intentionally.
 
 ---
