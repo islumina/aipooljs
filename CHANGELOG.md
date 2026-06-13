@@ -4,8 +4,9 @@ All notable changes to aipooljs are summarized here.
 
 ## [Unreleased]
 
-- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context.
-- Known follow-up: consider whether a stricter overflow handler mode should prevent aliasing by default.
+## [0.5.8] - 2026-06-14
+
+- Documentation-only slimming pass across README, stability notes, review backlog, and LLM context. Family version alignment at 0.5.8 — no runtime or API change. A stricter overflow-handler mode that prevents aliasing by default remains a documented follow-up.
 
 ## [0.5.6] - 2026-06-10
 

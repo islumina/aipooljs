@@ -2,7 +2,7 @@
 
 Tiny strict object pool for hot acquire/release paths: sprites, bullets, particles, DOM nodes, and worker slots.
 
-> **Status: 0.5.6 - stable 1.0-track surface.** The root entry is the public API.
+> **Status: 0.5.8 - stable 1.0-track surface.** The root entry is the public API.
 
 ## Install
 

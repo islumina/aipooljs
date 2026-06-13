@@ -2,7 +2,7 @@
 
 小型嚴格 object pool，適合高頻 acquire/release 路徑：sprites、bullets、particles、DOM nodes、worker slots。
 
-> **狀態：0.5.6 - 穩定 1.0 軌道 API。** root entry 是公開 API。
+> **狀態：0.5.8 - 穩定 1.0 軌道 API。** root entry 是公開 API。
 
 ## 安裝
 
