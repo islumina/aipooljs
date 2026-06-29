@@ -4,6 +4,10 @@ All notable changes to aipooljs are summarized here.
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-06-29
+
+- Family version alignment at 0.5.9 — no runtime or API change.
+
 ## [0.5.8] - 2026-06-14
 
 - Documentation-only slimming pass across README, stability notes, review backlog, and LLM context. Family version alignment at 0.5.8 — no runtime or API change. A stricter overflow-handler mode that prevents aliasing by default remains a documented follow-up.
