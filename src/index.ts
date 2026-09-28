@@ -130,12 +130,15 @@ export interface Pool<T> {
    *
    * **Invariants:**
    * 1. `release(obj)` is guaranteed to run in `finally` — on sync throw,
-   *    async reject, or abort.
-   * 2. If `opts.signal` is aborted before or during `fn`, `borrow` releases
-   *    the slot immediately and rejects with `signal.reason` (default:
-   *    `AbortError` DOMException). If the signal is already aborted before
-   *    `borrow` is called, the promise rejects without acquiring or calling
-   *    `fn`.
+   *    async reject, or abort — unless `drain()` already reclaimed it (INV8).
+   * 2. If `opts.signal` is aborted before or during `fn`, `borrow` rejects
+   *    with `signal.reason` (default: `AbortError` DOMException). If the
+   *    signal is already aborted before `borrow` is called, the promise
+   *    rejects without ever acquiring or calling `fn`. If it aborts while
+   *    `fn` is running, the rejection fires synchronously from the abort
+   *    event, but the slot itself is released one microtask later, in the
+   *    `finally` that runs after that rejection — synchronous code right
+   *    after `ctrl.abort()` still sees the slot as held (see **INV6**).
    * 3. Abort does **not** cancel inner work — `fn` keeps running; `signal` is
    *    advisory. See **INV6** below.
    * 4. If the pool is disposed, `borrow` throws `PoolDisposedError`
@@ -143,12 +146,13 @@ export interface Pool<T> {
    * 5. If `onOverflow` is `'null'` and the pool is full, `borrow` throws
    *    `PoolError` synchronously; `fn` is never called.
    * 6. **Abort does not fence inner work.** When `signal` aborts, `borrow`
-   *    releases the slot and rejects immediately. It does **not** cancel the
-   *    work inside `fn` — the signal is advisory. If `fn` keeps touching the
-   *    borrowed object after abort, it may mutate an object another caller has
-   *    since acquired. `fn` must observe `signal.aborted` and stop touching
-   *    the object the moment it aborts. Treat the borrowed object as invalid
-   *    once `signal` fires.
+   *    rejects immediately, but the slot is released one microtask later (see
+   *    **INV2**) — it is not freed within the same synchronous turn as
+   *    `ctrl.abort()`. It does **not** cancel the work inside `fn` — the
+   *    signal is advisory. If `fn` keeps touching the borrowed object after
+   *    abort, it may mutate an object another caller has since acquired. `fn`
+   *    must observe `signal.aborted` and stop touching the object the moment
+   *    it aborts. Treat the borrowed object as invalid once `signal` fires.
    * 7. **Dispose-during-borrow:** if `dispose()` is called while an async
    *    `borrow` is in flight, the `finally` block runs `release(obj)` after
    *    the pool is already disposed — `release` throws `PoolDisposedError`,
@@ -156,6 +160,10 @@ export interface Pool<T> {
    *    returned or threw. The caller will always see a `PoolDisposedError` in
    *    this race, regardless of `fn`'s outcome. This is an explicit invariant:
    *    do not dispose a pool that has active borrows.
+   * 8. **Drain-during-borrow:** `drain()` reclaims the borrowed object too, so
+   *    the `finally` block then skips `release(obj)` — it neither throws nor
+   *    resets/frees the object if another caller has since acquired it. `fn`
+   *    must treat the object as invalid after `drain()`, as with INV6.
    *
    * **Sync vs async dispatch:** disposed/overflow errors are thrown
    * synchronously (both overloads). A pre-aborted signal yields a rejected
@@ -296,6 +304,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   let capacity = size;
   const alive: Set<T> = new Set();
   let disposed = false;
+  let epoch = 0; // bumped by drain(); lets borrow() see its slot was reclaimed
 
   function ck(): void {
     if (disposed) throw new PoolDisposedError("aipooljs: pool has been disposed");
@@ -319,14 +328,16 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
       const growBy = capacity || 1;
       const grown: T[] = [];
       for (let i = 0; i < growBy; i++) grown.push(create()); // O(capacity) re-alloc; atomic
+      ck(); // re-check: create() may have disposed the pool re-entrantly
       for (const o of grown) avail.push(o);
-      capacity = growBy * 2;
+      capacity += growBy;
       return take();
     }
     // function handler — POL-B-01: reject if handler returned an object already in avail
     // (release-then-return "evict oldest" misuse corrupts avail∩alive disjointness invariant).
     // This is a cold overflow path; linear scan of avail is acceptable per design contract.
     const obj = overflow(self as Pool<T>);
+    ck(); // re-check: the handler may have disposed the pool re-entrantly
     if (avail.includes(obj)) {
       // POL-B-01: release-then-return corrupts avail∩alive disjointness invariant.
       throw new PoolError("aipooljs: overflow handler returned an available object");
@@ -337,17 +348,20 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
 
   function release(obj: T): void {
     ck();
-    if (!alive.has(obj)) throw new PoolError("foreign or double-released object");
-    alive.delete(obj);
+    if (!alive.delete(obj)) throw new PoolError("foreign or double-released object");
     reset(obj);
+    ck(); // reset() may have disposed the pool re-entrantly
     avail.push(obj);
   }
 
   function drain(): void {
     ck();
+    epoch++;
     for (const obj of [...alive]) {
-      alive.delete(obj);
+      // Skip entries a re-entrant reset() already released (no double reset/push).
+      if (!alive.delete(obj)) continue;
       reset(obj);
+      ck(); // reset() may have disposed the pool re-entrantly
       avail.push(obj);
     }
   }
@@ -378,14 +392,15 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     const obj = acquire();
     if (obj == null) throw new PoolError("pool exhausted"); // INV5: 'null' mode full → sync throw
 
-    // INV-once latch: single location for the boolean check, prevents double-release
-    // on concurrent abort + inner-settle paths.
-    let released = false;
+    // INV-once latch: `ep` is the drain epoch at acquire, decremented once released,
+    // so release runs at most once (abort + inner-settle) and never after drain()
+    // has reclaimed obj (INV8). The ck() keeps INV7 when drain() preceded dispose().
+    let ep = epoch;
     const ro = (): void => {
-      if (!released) {
-        released = true;
+      if (ep === epoch) {
+        ep--; // epoch only grows, so ep never matches again
         release(obj);
-      }
+      } else ck();
     };
 
     let r: unknown;
@@ -399,14 +414,14 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     if (r instanceof Promise) {
       if (!signal) return r.finally(ro); // async, no signal
       // async with signal
-      let onAbort: (() => void) | undefined;
+      let onAbort!: () => void; // assigned synchronously by the executor below
       return new Promise((resolve, reject) => {
         onAbort = () => reject(abortErr());
         signal.addEventListener("abort", onAbort, { once: true });
         if (signal.aborted) onAbort();
         r.then(resolve, reject);
       }).finally(() => {
-        if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+        signal.removeEventListener("abort", onAbort);
         ro();
       });
     }

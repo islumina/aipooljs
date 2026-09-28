@@ -200,6 +200,32 @@ describe("O. onOverflow", () => {
     expect(pool.available).toBe(0); // grew by max(0,1)=1; one acquired
   });
 
+  it("O17 [POL-R-02] size:0 + onOverflow:'grow' → capacity doubles each grow (1, 2, 4), matching size>=1 semantics", () => {
+    // Before fix: capacity = growBy * 2 recorded 2 after allocating 1 object from
+    // size 0, so later grows added 2 then 4 (totals 1, 3, 7) instead of doubling.
+    // After fix: capacity += growBy records 1, 2, 4 — true doubling, and
+    // create() is called exactly `expectedCapacity` times on each grow, as
+    // documented for size >= 1.
+    const opts = makeOpts(0);
+    const pool = createPool({ ...opts, onOverflow: "grow" });
+    const held: Obj[] = [];
+    let prevCapacity = 0; // growBy on the first grow is max(capacity, 1) = 1
+    let expectedCapacity = 0;
+
+    for (const _ of [0, 1, 2]) {
+      opts.create.mockClear();
+      const growBy = prevCapacity || 1;
+      held.push(pool.acquire());
+      expectedCapacity = prevCapacity + growBy;
+      expect(opts.create).toHaveBeenCalledTimes(growBy);
+      expect(pool.alive + pool.available).toBe(expectedCapacity);
+      prevCapacity = expectedCapacity;
+    }
+
+    // Doubling, exactly as documented for size >= 1: 1, 2, 4.
+    expect(expectedCapacity).toBe(4);
+  });
+
   it("O16 [POL-B-01] handler that release(victim)+return victim → throws PoolError (avail∩alive disjointness)", () => {
     // Before fix: victim ends up in both avail and alive; second acquire() gets the
     // same aliased object silently.

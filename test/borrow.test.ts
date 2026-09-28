@@ -119,6 +119,29 @@ describe("Br. borrow()", () => {
     expect(pool.alive).toBe(0);
   });
 
+  it("Br6b. INV2 abort-during-pending: the slot is still held synchronously right after abort() — release lands one microtask later", async () => {
+    const pool = createPool(makeOpts(1));
+    const ctrl = new AbortController();
+
+    const borrowPromise = pool.borrow(
+      async (_obj, _signal) => {
+        await new Promise(() => {}); // never resolves on its own
+      },
+      { signal: ctrl.signal },
+    );
+    borrowPromise.catch(() => {}); // avoid unhandled rejection warning
+
+    expect(pool.alive).toBe(1);
+    ctrl.abort();
+    // Synchronously after abort(), onAbort has only called reject(); the
+    // .finally(ro) handler has not run yet — the slot is still held.
+    expect(pool.alive).toBe(1);
+
+    await expect(borrowPromise).rejects.toMatchObject({ name: "AbortError" });
+    // One microtask (the .finally) later, the slot is released.
+    expect(pool.alive).toBe(0);
+  });
+
   it("Br7. abort with custom reason → borrow rejects with that exact reason", async () => {
     const pool = createPool(makeOpts(1));
     const ctrl = new AbortController();
@@ -469,5 +492,88 @@ describe("Br. borrow()", () => {
     // pool is disposed; alive/available both 0
     expect(pool.alive).toBe(0);
     expect(pool.available).toBe(0);
+  });
+
+  it("Br21. drain() + re-acquire while async borrow is in-flight → borrow's finally does not reset/free the new holder's object", async () => {
+    // drain() already reclaimed the borrowed slot, so borrow must not release it again.
+    const pool = createPool(makeOpts(1));
+    let resolveInner!: () => void;
+    const innerDone = new Promise<void>((res) => {
+      resolveInner = res;
+    });
+    const borrowPromise = pool.borrow(async (obj) => {
+      obj.value = 1;
+      await innerDone;
+      return 42;
+    });
+    pool.drain();
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(1);
+    const other = pool.acquire();
+    other.value = 7;
+    resolveInner();
+    await expect(borrowPromise).resolves.toBe(42);
+    expect(other.value).toBe(7);
+    expect(pool.alive).toBe(1);
+    expect(pool.available).toBe(0);
+  });
+
+  it("Br22. drain() while async borrow is in-flight (no re-acquire) → borrow resolves with fn's result", async () => {
+    const pool = createPool(makeOpts(1));
+    let resolveInner!: () => void;
+    const innerDone = new Promise<void>((res) => {
+      resolveInner = res;
+    });
+    const borrowPromise = pool.borrow(async (_obj) => {
+      await innerDone;
+      return 42;
+    });
+    pool.drain();
+    resolveInner();
+    await expect(borrowPromise).resolves.toBe(42);
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(1);
+  });
+
+  it("Br23. abort after drain() + re-acquire → abort path does not release the new holder's object", async () => {
+    const pool = createPool(makeOpts(1));
+    const ctrl = new AbortController();
+    let resolveInner!: () => void;
+    const innerDone = new Promise<void>((res) => {
+      resolveInner = res;
+    });
+    const borrowPromise = pool.borrow(
+      async (_obj, _signal) => {
+        await innerDone;
+        return 1;
+      },
+      { signal: ctrl.signal },
+    );
+    pool.drain();
+    const other = pool.acquire();
+    other.value = 7;
+    ctrl.abort();
+    await expect(borrowPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(other.value).toBe(7);
+    expect(pool.alive).toBe(1);
+    expect(pool.available).toBe(0);
+    resolveInner();
+    await new Promise<void>((r) => setTimeout(r, 0));
+  });
+
+  it("Br24. INV7 still holds after drain(): drain + dispose while async borrow is in-flight → PoolDisposedError", async () => {
+    const pool = createPool(makeOpts(1));
+    let resolveInner!: () => void;
+    const innerDone = new Promise<void>((res) => {
+      resolveInner = res;
+    });
+    const borrowPromise = pool.borrow(async (_obj) => {
+      await innerDone;
+      return 42;
+    });
+    pool.drain();
+    pool.dispose();
+    resolveInner();
+    await expect(borrowPromise).rejects.toBeInstanceOf(PoolDisposedError);
   });
 });
