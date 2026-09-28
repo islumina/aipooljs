@@ -119,6 +119,29 @@ describe("Br. borrow()", () => {
     expect(pool.alive).toBe(0);
   });
 
+  it("Br6b. INV2 abort-during-pending: the slot is still held synchronously right after abort() — release lands one microtask later", async () => {
+    const pool = createPool(makeOpts(1));
+    const ctrl = new AbortController();
+
+    const borrowPromise = pool.borrow(
+      async (_obj, _signal) => {
+        await new Promise(() => {}); // never resolves on its own
+      },
+      { signal: ctrl.signal },
+    );
+    borrowPromise.catch(() => {}); // avoid unhandled rejection warning
+
+    expect(pool.alive).toBe(1);
+    ctrl.abort();
+    // Synchronously after abort(), onAbort has only called reject(); the
+    // .finally(ro) handler has not run yet — the slot is still held.
+    expect(pool.alive).toBe(1);
+
+    await expect(borrowPromise).rejects.toMatchObject({ name: "AbortError" });
+    // One microtask (the .finally) later, the slot is released.
+    expect(pool.alive).toBe(0);
+  });
+
   it("Br7. abort with custom reason → borrow rejects with that exact reason", async () => {
     const pool = createPool(makeOpts(1));
     const ctrl = new AbortController();

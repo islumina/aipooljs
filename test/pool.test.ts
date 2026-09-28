@@ -326,6 +326,88 @@ describe("E. dispose", () => {
 });
 
 // ---------------------------------------------------------------------------
+// H. Re-entrant dispose() from inside a user callback
+// ---------------------------------------------------------------------------
+
+describe("H. Re-entrant dispose() from inside a user callback", () => {
+  it("H1. onOverflow function handler that disposes the pool: acquire() throws PoolDisposedError, no state leak", () => {
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: () => {},
+      onOverflow: (p) => {
+        p.dispose();
+        return { value: 0 };
+      },
+    });
+    pool.acquire(); // exhaust the single slot
+    expect(() => pool.acquire()).toThrow(PoolDisposedError);
+    expect(pool.disposed).toBe(true);
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(0);
+  });
+
+  it("H2. reset() that disposes the pool during release(): release() throws PoolDisposedError, no state leak", () => {
+    // Ref object avoids `let pool!` (Biome useConst false-positive on the
+    // definite-assignment pattern — see O16 in overflow.test.ts).
+    const ref: { pool?: ReturnType<typeof createPool<Obj>> } = {};
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => ({ value: 0 }),
+      reset: () => {
+        ref.pool?.dispose();
+      },
+    });
+    ref.pool = pool;
+    const obj = pool.acquire();
+    expect(() => pool.release(obj)).toThrow(PoolDisposedError);
+    expect(pool.disposed).toBe(true);
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(0);
+  });
+
+  it("H3. reset() that disposes the pool during drain(): drain() throws PoolDisposedError, no state leak", () => {
+    const ref: { pool?: ReturnType<typeof createPool<Obj>> } = {};
+    const pool = createPool<Obj>({
+      size: 3,
+      create: () => ({ value: 0 }),
+      reset: () => {
+        ref.pool?.dispose();
+      },
+    });
+    ref.pool = pool;
+    pool.acquire();
+    pool.acquire();
+    pool.acquire();
+    expect(() => pool.drain()).toThrow(PoolDisposedError);
+    expect(pool.disposed).toBe(true);
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(0);
+  });
+
+  it("H4. create() that disposes the pool during 'grow': acquire() throws PoolDisposedError instead of returning a grown object", () => {
+    const ref: { pool?: ReturnType<typeof createPool<Obj>> } = {};
+    let growing = false;
+    const pool = createPool<Obj>({
+      size: 1,
+      create: () => {
+        if (growing) ref.pool?.dispose();
+        return { value: 0 };
+      },
+      reset: () => {},
+      onOverflow: "grow",
+    });
+    ref.pool = pool;
+    pool.acquire(); // exhaust the initial slot
+    growing = true;
+    expect(() => pool.acquire()).toThrow(PoolDisposedError);
+    expect(pool.disposed).toBe(true);
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // F. Destructurable + getters
 // ---------------------------------------------------------------------------
 
