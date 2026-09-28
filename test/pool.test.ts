@@ -248,6 +248,34 @@ describe("D. drain", () => {
     expect(pool.alive).toBe(1);
     expect(pool.available).toBe(1);
   });
+
+  it("D6. drain with a reset that re-entrantly releases a later snapshot entry resets and frees it once", () => {
+    // parent's reset releases child, which also sits later in drain's snapshot.
+    interface Node {
+      children: Node[];
+    }
+    const pool = createPool<Node>({
+      size: 3,
+      create: () => ({ children: [] }),
+      reset: (n) => {
+        for (const c of n.children) pool.release(c);
+        n.children.length = 0;
+      },
+    });
+    const parent = pool.acquire();
+    const child = pool.acquire();
+    parent.children.push(child);
+    pool.drain();
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(3);
+    const x = pool.acquire();
+    const y = pool.acquire();
+    const z = pool.acquire();
+    expect(new Set([x, y, z]).size).toBe(3);
+    pool.release(x);
+    pool.release(y);
+    expect(() => pool.release(z)).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------

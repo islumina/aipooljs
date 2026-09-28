@@ -346,7 +346,8 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   function drain(): void {
     ck();
     for (const obj of [...alive]) {
-      alive.delete(obj);
+      // Skip entries a re-entrant reset() already released (no double reset/push).
+      if (!alive.delete(obj)) continue;
       reset(obj);
       avail.push(obj);
     }
