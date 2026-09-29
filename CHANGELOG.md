@@ -20,6 +20,7 @@ All notable changes to aipooljs are summarized here.
 - Fixed: user callbacks (`onOverflow` handler, `create()`, `reset()`) that re-entrantly call `dispose()` no longer leave the pool disposed with `alive`/`available` above zero — the in-progress call now throws `PoolDisposedError`.
 - Fixed: `onOverflow: "grow"` from `size: 0` now doubles capacity correctly (1, 2, 4, ...) instead of drifting (1, 3, 7, ...).
 - Fixed: `package.json#exports` nests `types` under each of `import`/`require`, fixing TS1479 for CommonJS consumers under `module: node16`/`nodenext`.
+- Fixed: `pnpm typecheck` now type-checks `test/` (the test tsconfig inherited `exclude: ["test"]`), so the suite's compile-time assertions are enforced.
 - Docs: STABILITY.md's Behavioral Contract now states the construction validation order, the nullish-result rule, `borrow()` argument checks, the `aipooljs: ` message shape and the callback re-entrancy clause (no mailbox; nested calls run immediately); README/README_ZHTW list the misuse errors.
 - Docs: JSDoc for `PoolError`, `PoolOptions.create`/`reset`, `OverflowHandler`, `dispose()` (now names `borrow`) and `borrow()` (new INV9 on argument validation) matches the 0.6.0 contract.
 

@@ -146,7 +146,7 @@ describe("O. onOverflow", () => {
 
   it("O10. 'null' + subsequent release: null does not consume a slot; existing obj releases fine", () => {
     const pool = createPool({ ...makeOpts(2), onOverflow: "null" });
-    const obj = pool.acquire();
+    const obj = pool.acquire() as Obj; // first acquire on a size-2 pool never overflows
     pool.acquire(); // exhaust 2nd slot
     const nullResult = pool.acquire(); // null, no slot taken
     expect(nullResult).toBeNull();
