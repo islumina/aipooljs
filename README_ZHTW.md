@@ -2,7 +2,7 @@
 
 小型嚴格 object pool，適合高頻 acquire/release 路徑：sprites、bullets、particles、DOM nodes、worker slots。
 
-> **狀態：0.5.9 - 穩定 1.0 軌道 API。** root entry 是公開 API。
+> **狀態：0.6.0 - 穩定 1.0 軌道 API。** root entry 是公開 API。
 
 ## 安裝
 
@@ -47,7 +47,9 @@ bullets.dispose();
 - `pool.borrow(fn, { signal }?)` acquire、執行 `fn`，並在 `finally` release。
 - `pool.dispose()` 是可重複呼叫的永久 teardown。
 - Read-only state：`available`、`alive`、`disposed`。
-- Errors：`PoolError`、`PoolDisposedError`。
+- Errors：`PoolError`、`PoolDisposedError`。每個 `PoolError` 訊息都以 `aipooljs: ` 開頭；請比對 class，不要比對完整文字。
+- 誤用會在任何動作之前丟出 `PoolError`：`create`、`reset` 或 `borrow` 的 `fn` 不是函式、`size` 或 `onOverflow` 無效（缺少 options 物件會在 `size` 檢查失敗），以及 `borrow` 的 `signal` 不是 `AbortSignal`。
+- `create()` 與 function overflow handler 不可回傳 `null` 或 `undefined`；否則會丟出 `PoolError`，pool 狀態不變。
 
 ## Overflow Strategies
 
@@ -56,7 +58,7 @@ bullets.dispose();
 | `"throw"` | 預設；空池時丟 `PoolError`。 |
 | `"null"` | `acquire()` 回傳 `null`；factory overload 會窄化 pool type。 |
 | `"grow"` | 分配更多 objects 並倍增 capacity；可能造成同 frame GC spike。 |
-| function | Escape hatch。handler 回傳 slot，並自行負責避免 aliasing/recursion。 |
+| function | Escape hatch。handler 回傳 slot（不可為 `null`/`undefined`；要表示「沒有物件」請用 `"null"`），並自行負責避免 aliasing/recursion。 |
 
 ## 注意事項
 
