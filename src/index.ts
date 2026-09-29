@@ -18,7 +18,9 @@
  *   `create()` (O(capacity) re-alloc + same-frame GC spike). Use only where
  *   unbounded growth is acceptable.
  * - function handler — called with the pool as argument; return value is added to
- *   the alive set and handed to the caller. **Warning:** if the handler recycles
+ *   the alive set and handed to the caller. A `null` or `undefined` return throws
+ *   {@link PoolError} and leaves the pool unchanged; to signal "no object", use
+ *   `'null'` instead. **Warning:** if the handler recycles
  *   an already-alive object (e.g. "evict the oldest"), the previous holder's
  *   reference is aliased — any subsequent `release` from either party may throw
  *   `PoolError("foreign or double-released")`. This is an escape hatch; caller
@@ -42,19 +44,23 @@ export type OverflowHandler<T> = "throw" | "null" | "grow" | ((pool: Pool<T>) =>
  */
 export interface PoolOptions<T> {
   /**
-   * Factory invoked exactly `size` times at construction. Each invocation
-   * must return a fresh instance — pool semantics depend on independence
-   * between slots.
+   * Factory invoked exactly `size` times at construction (and again by
+   * `'grow'`). Each invocation must return a fresh instance — pool semantics
+   * depend on independence between slots. Must be a function, or
+   * {@link createPool} throws {@link PoolError}.
    *
-   * If `create()` throws, {@link createPool} throws and no slots are kept.
+   * If `create()` throws, or returns `null` or `undefined` (which throws
+   * {@link PoolError}), {@link createPool} throws and no slots are kept; during
+   * `'grow'` the pool is left unchanged.
    */
   create: () => T;
 
   /**
-   * Reset hook called on every {@link Pool.release}. Must clear mutable
-   * fields back to a known good state without `delete`-ing properties:
-   * deleting fields demotes V8 hidden classes and turns the steady-state
-   * loop megamorphic.
+   * Reset hook called on every {@link Pool.release}. Must be a function, or
+   * {@link createPool} throws {@link PoolError} before calling `create()`.
+   * Must clear mutable fields back to a known good state without
+   * `delete`-ing properties: deleting fields demotes V8 hidden classes and
+   * turns the steady-state loop megamorphic.
    *
    * Prefer `obj.x = 0; obj.visible = false;` over `delete obj.x`.
    *
@@ -119,8 +125,8 @@ export interface Pool<T> {
 
   /**
    * Idempotent teardown. Releases internal references so the GC can reclaim
-   * pooled objects. Subsequent calls to `acquire` / `release` / `drain`
-   * throw {@link PoolDisposedError}.
+   * pooled objects. Subsequent calls to `acquire` / `release` / `drain` /
+   * `borrow` throw {@link PoolDisposedError}.
    */
   dispose(): void;
 
@@ -164,8 +170,12 @@ export interface Pool<T> {
    *    the `finally` block then skips `release(obj)` — it neither throws nor
    *    resets/frees the object if another caller has since acquired it. `fn`
    *    must treat the object as invalid after `drain()`, as with INV6.
+   * 9. **Argument validation:** after the INV4 check and before `acquire`, a
+   *    `fn` that is not a function, or an `opts.signal` without
+   *    `addEventListener` / `removeEventListener`, throws `PoolError`
+   *    synchronously. A `null` or `undefined` signal means no signal.
    *
-   * **Sync vs async dispatch:** disposed/overflow errors are thrown
+   * **Sync vs async dispatch:** disposed/overflow/validation errors are thrown
    * synchronously (both overloads). A pre-aborted signal yields a rejected
    * Promise. The async branch activates only when `fn` returns a native
    * `Promise`; a non-`instanceof Promise` thenable is treated as sync —
@@ -202,8 +212,11 @@ export interface NullPool<T> extends Omit<Pool<T>, "acquire"> {
 }
 
 /**
- * Recoverable pool error. Thrown by `acquire()` on overflow and by
- * `release()` on double-release or foreign-object release.
+ * Recoverable pool error. Thrown by `acquire()` on overflow, by `release()`
+ * on double-release or foreign-object release, by `createPool()` and
+ * `borrow()` on invalid arguments, and whenever `create()` or an overflow
+ * handler returns `null` or `undefined`. Every message starts with
+ * `aipooljs: `; match on the class plus a regex, not the exact text.
  *
  * @public
  */
@@ -218,6 +231,12 @@ export class PoolError extends Error {
  */
 export class PoolDisposedError extends Error {
   override readonly name = "PoolDisposedError";
+}
+
+// Single thrower for every PoolError, so each message carries the family
+// `aipooljs: ` prefix without repeating it at every call site.
+function bad(msg: string): never {
+  throw new PoolError(`aipooljs: ${msg}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,12 +297,13 @@ export function createPool<T>(opts: PoolOptions<T> & { onOverflow: "null" }): Nu
 export function createPool<T>(opts: PoolOptions<T>): Pool<T>;
 
 export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
-  const { size, create, reset } = opts;
-  const overflow = opts.onOverflow ?? "throw";
+  // Validate every argument before the first create() call; misuse is PoolError.
+  // Object() makes a missing or primitive `opts` destructure to undefined fields
+  // (reported by the size check) instead of leaking a bare TypeError.
+  const { size, create, reset, onOverflow } = Object(opts) as PoolOptions<T>;
+  const overflow = onOverflow ?? "throw";
 
-  if (!Number.isInteger(size) || size < 0) {
-    throw new PoolError("aipooljs: size must be a non-negative integer");
-  }
+  if (!(Number.isInteger(size) && size >= 0)) bad("size must be a non-negative integer");
 
   // POL-S-02: validate onOverflow at construction time so a typo'd string throws
   // immediately rather than deferring a TypeError to first overflow mid-frame.
@@ -293,12 +313,24 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     overflow !== "null" &&
     overflow !== "grow"
   ) {
-    throw new PoolError("aipooljs: invalid onOverflow");
+    bad("invalid onOverflow");
+  }
+  // Checked here so a missing reset fails at construction, not at the first
+  // release() mid-frame (which would also lose that slot).
+  if (typeof create !== "function") bad("create must be a function");
+  if (typeof reset !== "function") bad("reset must be a function");
+
+  // Every create() result (construction and 'grow') goes through make(): a
+  // nullish object would be handed out as T and corrupt alive/available.
+  function make(): T {
+    const o = create();
+    if (o == null) bad("create() returned null or undefined");
+    return o;
   }
 
   const avail: T[] = [];
   for (let i = 0; i < size; i++) {
-    avail.push(create());
+    avail.push(make());
   }
 
   let capacity = size;
@@ -310,10 +342,10 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     if (disposed) throw new PoolDisposedError("aipooljs: pool has been disposed");
   }
 
-  // Precondition: avail is non-empty.
+  // Precondition: avail is non-empty. It never holds null/undefined (make() and
+  // the handler check reject them), so pop() always yields a T.
   function take(): T {
-    const obj = avail.pop();
-    if (obj === undefined) throw new PoolError("pool exhausted"); // noUncheckedIndexedAccess guard
+    const obj = avail.pop() as T;
     alive.add(obj);
     return obj;
   }
@@ -321,13 +353,13 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   function acquire(): T | null {
     ck();
     if (avail.length > 0) return take();
-    if (overflow === "throw") throw new PoolError("pool exhausted");
+    if (overflow === "throw") bad("pool exhausted");
     if (overflow === "null") return null; // does NOT mutate alive or avail
     if (overflow === "grow") {
       // POL-R-02: size:0 would give 0*2=0 forever; grow by at least 1.
       const growBy = capacity || 1;
       const grown: T[] = [];
-      for (let i = 0; i < growBy; i++) grown.push(create()); // O(capacity) re-alloc; atomic
+      for (let i = 0; i < growBy; i++) grown.push(make()); // O(capacity) re-alloc; atomic
       ck(); // re-check: create() may have disposed the pool re-entrantly
       for (const o of grown) avail.push(o);
       capacity += growBy;
@@ -338,17 +370,15 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     // This is a cold overflow path; linear scan of avail is acceptable per design contract.
     const obj = overflow(self as Pool<T>);
     ck(); // re-check: the handler may have disposed the pool re-entrantly
-    if (avail.includes(obj)) {
-      // POL-B-01: release-then-return corrupts avail∩alive disjointness invariant.
-      throw new PoolError("aipooljs: overflow handler returned an available object");
-    }
+    if (obj == null) bad("overflow handler returned null or undefined");
+    if (avail.includes(obj)) bad("overflow handler returned an available object");
     alive.add(obj);
     return obj;
   }
 
   function release(obj: T): void {
     ck();
-    if (!alive.delete(obj)) throw new PoolError("foreign or double-released object");
+    if (!alive.delete(obj)) bad("foreign or double-released object");
     reset(obj);
     ck(); // reset() may have disposed the pool re-entrantly
     avail.push(obj);
@@ -379,7 +409,18 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   ): unknown {
     ck(); // INV4: disposed → PoolDisposedError synchronously
 
+    // INV9: validate before acquire. A signal missing removeEventListener used to
+    // make the async finally throw before release, leaking the slot. Duck-typed
+    // (not instanceof) so polyfilled and cross-realm signals pass; null = none.
+    if (typeof fn !== "function") bad("fn must be a function");
     const signal = opts?.signal;
+    if (
+      signal &&
+      (typeof signal.addEventListener !== "function" ||
+        typeof signal.removeEventListener !== "function")
+    ) {
+      bad("signal must be an AbortSignal");
+    }
     // Shared thunk: signal.reason ?? AbortError DOMException (INV2 / in-flight abort).
     // Both pre-abort and in-flight abort reuse the same expression — tsup minifies
     // the repeated string literal into a single reference.
@@ -390,7 +431,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     if (signal?.aborted) return Promise.reject(abortErr());
 
     const obj = acquire();
-    if (obj == null) throw new PoolError("pool exhausted"); // INV5: 'null' mode full → sync throw
+    if (obj == null) bad("pool exhausted"); // INV5: 'null' mode full → sync throw
 
     // INV-once latch: `ep` is the drain epoch at acquire, decremented once released,
     // so release runs at most once (abort + inner-settle) and never after drain()
@@ -417,7 +458,9 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
       let onAbort!: () => void; // assigned synchronously by the executor below
       return new Promise((resolve, reject) => {
         onAbort = () => reject(abortErr());
-        signal.addEventListener("abort", onAbort, { once: true });
+        // No `once`: an AbortSignal fires "abort" at most once and the finally
+        // below removes the listener either way.
+        signal.addEventListener("abort", onAbort);
         if (signal.aborted) onAbort();
         r.then(resolve, reject);
       }).finally(() => {

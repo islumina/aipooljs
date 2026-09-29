@@ -338,6 +338,72 @@ describe("O. onOverflow", () => {
     expect(pool.available).toBe(2);
   });
 
+  it("O20. 'grow': create() returning null or undefined mid-grow throws PoolError; pool state unchanged (atomic)", () => {
+    for (const nullish of [null, undefined]) {
+      let growing = false;
+      let call = 0;
+      const pool = createPool<Obj>({
+        size: 2,
+        create: () => {
+          if (growing && ++call === 2) return nullish as unknown as Obj;
+          return { value: 0 };
+        },
+        reset: (o) => {
+          o.value = 0;
+        },
+        onOverflow: "grow",
+      });
+      const a = pool.acquire();
+      const b = pool.acquire();
+      growing = true;
+      expect(() => pool.acquire()).toThrow(PoolError);
+      expect(pool.alive).toBe(2);
+      expect(pool.available).toBe(0);
+      call = 0;
+      expect(() => pool.acquire()).toThrow(/^aipooljs: create\(\) returned null or undefined$/);
+      expect(pool.alive).toBe(2);
+      expect(pool.available).toBe(0);
+      // Capacity was not bumped by the failed grows: the next grow still adds 2.
+      growing = false;
+      pool.acquire();
+      expect(pool.alive + pool.available).toBe(4);
+      pool.release(a);
+      pool.release(b);
+      expect(pool.alive).toBe(1);
+      expect(pool.available).toBe(3);
+    }
+  });
+
+  it("O21. function handler returning null or undefined throws PoolError; alive/available unchanged", () => {
+    for (const nullish of [null, undefined]) {
+      const handler = vi.fn((_p: Pool<Obj>) => nullish as unknown as Obj);
+      const pool = createPool<Obj>({ ...makeOpts(1), onOverflow: handler });
+      const held = pool.acquire();
+      expect(() => pool.acquire()).toThrow(PoolError);
+      expect(() => pool.acquire()).toThrow(
+        /^aipooljs: overflow handler returned null or undefined$/,
+      );
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(pool.alive).toBe(1);
+      expect(pool.available).toBe(0);
+      // The pool still works: releasing the held slot and re-acquiring it succeeds.
+      pool.release(held);
+      expect(pool.acquire()).toBe(held);
+    }
+  });
+
+  it("O22. function handler that disposes the pool and returns undefined → PoolDisposedError wins", () => {
+    const pool = createPool<Obj>({
+      ...makeOpts(1),
+      onOverflow: (p) => {
+        p.dispose();
+        return undefined as unknown as Obj;
+      },
+    });
+    pool.acquire();
+    expect(() => pool.acquire()).toThrow(PoolDisposedError);
+  });
+
   it("O19 [POL-T-02] infinite-recursion hazard pin: handler that re-entrantly calls acquire() on exhausted pool → throws RangeError (stack overflow)", () => {
     // The JSDoc (src/index.ts:27–31) documents this hazard as contract.
     // This test pins that a handler calling acquire() without first freeing a slot

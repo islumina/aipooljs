@@ -576,4 +576,106 @@ describe("Br. borrow()", () => {
     resolveInner();
     await expect(borrowPromise).rejects.toBeInstanceOf(PoolDisposedError);
   });
+
+  it("Br25. fn that is not a function throws PoolError before acquiring: no reset, no overflow handler, counters unchanged", () => {
+    const handler = vi.fn((): Obj => ({ value: 0 }));
+    const opts = makeOpts(1);
+    const pool = createPool({ ...opts, onOverflow: handler });
+    pool.acquire(); // exhaust, so a stray acquire() would invoke the handler
+    opts.reset.mockClear();
+    for (const fn of [undefined, null, 1, "fn", {}]) {
+      const call = () => pool.borrow(fn as unknown as (o: Obj) => number);
+      expect(call).toThrow(PoolError);
+      expect(call).toThrow(/^aipooljs: fn must be a function$/);
+    }
+    expect(handler).not.toHaveBeenCalled();
+    expect(opts.reset).not.toHaveBeenCalled();
+    expect(pool.alive).toBe(1);
+    expect(pool.available).toBe(0);
+  });
+
+  it("Br26. signal without addEventListener/removeEventListener throws PoolError synchronously; fn not called, slot not leaked", () => {
+    const pool = createPool(makeOpts(1));
+    const fn = vi.fn(async (_obj: Obj) => 1);
+    const noRemove = { aborted: false, addEventListener: () => {} };
+    for (const signal of [{}, { aborted: false }, noRemove, 1]) {
+      const call = () =>
+        pool.borrow(fn, { signal: signal as unknown as AbortSignal }) as Promise<number>;
+      expect(call).toThrow(PoolError);
+      expect(call).toThrow(/^aipooljs: signal must be an AbortSignal$/);
+    }
+    expect(fn).not.toHaveBeenCalled();
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(1);
+  });
+
+  it("Br27. null or undefined signal is treated as no signal", async () => {
+    const pool = createPool(makeOpts(1));
+    for (const signal of [null, undefined]) {
+      const p = pool.borrow(async (_obj) => 3, {
+        signal: signal as unknown as AbortSignal,
+      });
+      await expect(p).resolves.toBe(3);
+      expect(pool.alive).toBe(0);
+    }
+  });
+
+  it("Br28. overflow handler returning undefined → borrow throws PoolError synchronously; fn not called", () => {
+    const pool = createPool<Obj>({ ...makeOpts(1), onOverflow: () => undefined as unknown as Obj });
+    pool.acquire();
+    const fn = vi.fn((_obj: Obj) => 0);
+    expect(() => pool.borrow(fn)).toThrow(
+      /^aipooljs: overflow handler returned null or undefined$/,
+    );
+    expect(fn).not.toHaveBeenCalled();
+    expect(pool.alive).toBe(1);
+  });
+
+  it("Br30. abort listener is removed once the async borrow settles (resolve, reject and abort paths); duck-typed signals work", async () => {
+    const make = () => {
+      const listeners = new Set<() => void>();
+      const signal = {
+        aborted: false,
+        reason: undefined as unknown,
+        addEventListener: vi.fn((_t: string, l: () => void) => listeners.add(l)),
+        removeEventListener: vi.fn((_t: string, l: () => void) => listeners.delete(l)),
+        fire(): void {
+          this.aborted = true;
+          this.reason = new Error("stop");
+          for (const l of [...listeners]) l();
+        },
+      };
+      return { signal, listeners };
+    };
+    const pool = createPool(makeOpts(1));
+    const as = (s: unknown) => ({ signal: s as AbortSignal });
+
+    const ok = make();
+    await expect(pool.borrow(async () => 1, as(ok.signal))).resolves.toBe(1);
+    expect(ok.listeners.size).toBe(0);
+
+    const failed = make();
+    await expect(
+      pool.borrow(async () => {
+        throw new Error("x");
+      }, as(failed.signal)),
+    ).rejects.toThrow("x");
+    expect(failed.listeners.size).toBe(0);
+
+    const aborted = make();
+    const p = pool.borrow(() => new Promise<number>(() => {}), as(aborted.signal));
+    expect(aborted.listeners.size).toBe(1);
+    aborted.signal.fire();
+    await expect(p).rejects.toThrow("stop");
+    expect(aborted.listeners.size).toBe(0);
+    expect(aborted.signal.removeEventListener).toHaveBeenCalledOnce();
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(1);
+  });
+
+  it("Br29. INV5 message: 'null' mode full → PoolError carries the aipooljs prefix", () => {
+    const pool = createPool({ ...makeOpts(1), onOverflow: "null" });
+    pool.acquire();
+    expect(() => pool.borrow((_obj) => 0)).toThrow(/^aipooljs: pool exhausted$/);
+  });
 });

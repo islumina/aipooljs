@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { PoolDisposedError, PoolError, createPool } from "../src/index.js";
+import type { PoolOptions } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // Shared fixture helpers
@@ -57,6 +58,81 @@ describe("A. Construction & validation", () => {
     };
     expect(() => createPool(opts)).toThrow("boom");
   });
+
+  it("A6. options that are missing or not an object throw PoolError (via the size check), not a bare TypeError", () => {
+    for (const bad of [undefined, null, 42, "opts", true]) {
+      expect(() => createPool(bad as unknown as PoolOptions<Obj>)).toThrow(PoolError);
+      expect(() => createPool(bad as unknown as PoolOptions<Obj>)).toThrow(
+        /^aipooljs: size must be a non-negative integer$/,
+      );
+    }
+  });
+
+  it("A7. create that is missing or not a function throws PoolError at construction", () => {
+    for (const create of [undefined, null, 1, "fn", {}]) {
+      const reset = vi.fn();
+      const opts = { size: 2, create, reset } as unknown as PoolOptions<Obj>;
+      expect(() => createPool(opts)).toThrow(PoolError);
+      expect(() => createPool(opts)).toThrow(/^aipooljs: create must be a function$/);
+      expect(reset).not.toHaveBeenCalled();
+    }
+  });
+
+  it("A8. reset that is missing or not a function throws PoolError before any create() call", () => {
+    for (const reset of [undefined, null, 1, "fn", {}]) {
+      const create = vi.fn((): Obj => ({ value: 0 }));
+      const opts = { size: 2, create, reset } as unknown as PoolOptions<Obj>;
+      expect(() => createPool(opts)).toThrow(PoolError);
+      expect(() => createPool(opts)).toThrow(/^aipooljs: reset must be a function$/);
+      expect(create).not.toHaveBeenCalled();
+    }
+  });
+
+  it("A9. validation order: options, size, onOverflow, create, reset", () => {
+    const none = {} as unknown as PoolOptions<Obj>;
+    expect(() => createPool(none)).toThrow(/^aipooljs: size must be a non-negative integer$/);
+    const badOverflow = { size: 1, onOverflow: "gorw" } as unknown as PoolOptions<Obj>;
+    expect(() => createPool(badOverflow)).toThrow(/^aipooljs: invalid onOverflow$/);
+    const noFns = { size: 1 } as unknown as PoolOptions<Obj>;
+    expect(() => createPool(noFns)).toThrow(/^aipooljs: create must be a function$/);
+  });
+
+  it("A10. create() returning null or undefined at construction throws PoolError; no pool is built", () => {
+    for (const nullish of [null, undefined]) {
+      let call = 0;
+      const create = vi.fn((): Obj => {
+        call++;
+        return (call === 2 ? nullish : { value: 0 }) as Obj;
+      });
+      expect(() => createPool({ size: 3, create, reset: () => {} })).toThrow(PoolError);
+      expect(create).toHaveBeenCalledTimes(2); // stops at the nullish slot
+      call = 0;
+      expect(() => createPool({ size: 3, create, reset: () => {} })).toThrow(
+        /^aipooljs: create\(\) returned null or undefined$/,
+      );
+    }
+  });
+
+  it("A11. create() may return falsy non-nullish values (0, '', false)", () => {
+    for (const v of [0, "", false]) {
+      const pool = createPool<typeof v>({ size: 1, create: () => v, reset: () => {} });
+      expect(pool.acquire()).toBe(v);
+      expect(pool.alive).toBe(1);
+    }
+  });
+
+  it("A12. error.name equals the class name", () => {
+    expect(new PoolError("x").name).toBe("PoolError");
+    expect(new PoolDisposedError("x").name).toBe("PoolDisposedError");
+    const pool = createPool(makeOpts(0));
+    try {
+      pool.acquire();
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(PoolError);
+      expect((e as Error).name).toBe("PoolError");
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -85,6 +161,7 @@ describe("B. acquire", () => {
     pool.acquire();
     pool.acquire();
     expect(() => pool.acquire()).toThrow(PoolError);
+    expect(() => pool.acquire()).toThrow(/^aipooljs: pool exhausted$/);
   });
 
   it("B4. acquire returns LIFO (last released first)", () => {
@@ -146,12 +223,14 @@ describe("C. release", () => {
     const obj = pool.acquire();
     pool.release(obj);
     expect(() => pool.release(obj)).toThrow(PoolError);
+    expect(() => pool.release(obj)).toThrow(/^aipooljs: foreign or double-released object$/);
   });
 
   it("C4. release(foreign) throws PoolError", () => {
     const pool = createPool(makeOpts(1));
     const foreign: Obj = { value: 99 };
     expect(() => pool.release(foreign)).toThrow(PoolError);
+    expect(() => pool.release(foreign)).toThrow(/^aipooljs: foreign or double-released object$/);
   });
 
   it("C5. reset throws → release rethrows; object gone from both available and aliveSet", () => {
