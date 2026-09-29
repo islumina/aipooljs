@@ -2,7 +2,7 @@
 
 Tiny strict object pool for hot acquire/release paths: sprites, bullets, particles, DOM nodes, and worker slots.
 
-> **Status: 0.5.9 - stable 1.0-track surface.** The root entry is the public API.
+> **Status: 0.6.0 - stable 1.0-track surface.** The root entry is the public API.
 
 ## Install
 
@@ -47,7 +47,9 @@ bullets.dispose();
 - `pool.borrow(fn, { signal }?)` acquires, runs `fn`, and releases in `finally`.
 - `pool.dispose()` is idempotent permanent teardown.
 - Read-only state: `available`, `alive`, `disposed`.
-- Errors: `PoolError`, `PoolDisposedError`.
+- Errors: `PoolError`, `PoolDisposedError`. Every `PoolError` message starts with `aipooljs: `; match on the class, not the exact text.
+- Misuse throws `PoolError` before anything happens: `create`, `reset` or `borrow`'s `fn` not a function, an invalid `size` or `onOverflow` (a missing options object fails the `size` check), and a `borrow` `signal` that is not an `AbortSignal`.
+- `create()` and a function overflow handler must not return `null` or `undefined`; doing so throws `PoolError` and leaves the pool unchanged.
 
 ## Overflow Strategies
 
@@ -56,7 +58,7 @@ bullets.dispose();
 | `"throw"` | Default; throws `PoolError` when empty. |
 | `"null"` | `acquire()` returns `null`; factory overload narrows the pool type. |
 | `"grow"` | Allocates more objects and doubles capacity; can cause same-frame GC spikes. |
-| function | Escape hatch. The handler returns a slot and is responsible for avoiding aliasing/recursion. |
+| function | Escape hatch. The handler returns a slot (never `null`/`undefined`; use `"null"` for that) and is responsible for avoiding aliasing/recursion. |
 
 ## Sharp Edges
 

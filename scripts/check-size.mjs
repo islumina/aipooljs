@@ -22,7 +22,19 @@ const budgets = {
   // (869 -> 939 B): POL-S-02 onOverflow construction validation, POL-B-01
   // avail-membership guard on the cold overflow path, POL-R-02 grow-from-zero.
   // Error messages already minimal; ~11 B margin keeps the creep gate tight.
-  "dist/index.js": 950,
+  // 0.6.0: 950 B -> 1,050 B (maintainer-approved for the 0.6.0 minor, ai*js
+  // size-budget decision). Measured 950 -> 1,048 B gzip. Bytes consumed by the
+  // four 0.6.0 validation throws plus the borrow() argument gate:
+  //   • createPool: `create must be a function` / `reset must be a function`.
+  //   • create() returning null/undefined, at construction and in 'grow'
+  //     (shared make() helper).
+  //   • function onOverflow handler returning null/undefined.
+  //   • borrow(): `fn must be a function` and the duck-typed signal gate that
+  //     closes the slot leak for a signal without removeEventListener.
+  // Offsetting trims first: one bad() thrower adds the `aipooljs: ` prefix,
+  // the dead take() undefined guard and the redundant `{ once: true }` are gone,
+  // and options destructure through Object() instead of a separate gate.
+  "dist/index.js": 1050,
 };
 
 const failures = [];
