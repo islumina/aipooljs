@@ -1,7 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-
-import { PoolDisposedError, PoolError, createPool } from "../src/index.js";
 import type { Pool } from "../src/index.js";
+import { createPool, PoolDisposedError, PoolError } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // Shared fixture helpers
