@@ -678,4 +678,36 @@ describe("Br. borrow()", () => {
     pool.acquire();
     expect(() => pool.borrow((_obj) => 0)).toThrow(/^aipooljs: pool exhausted$/);
   });
+
+  it("Br31. fn releases the borrowed object itself → borrow's finally skips its release (no double-release PoolError)", () => {
+    const opts = makeOpts(1);
+    const pool = createPool(opts);
+    opts.reset.mockClear();
+    const result = pool.borrow((obj) => {
+      pool.release(obj);
+      return 5;
+    });
+    expect(result).toBe(5);
+    expect(opts.reset).toHaveBeenCalledOnce();
+    expect(pool.alive).toBe(0);
+    expect(pool.available).toBe(1);
+    // A direct double release is still detected.
+    const again = pool.acquire();
+    pool.release(again);
+    expect(() => pool.release(again)).toThrow(PoolError);
+  });
+
+  it("Br32. fn releases the borrowed object and another caller re-acquires it → borrow's finally leaves the new holder's slot alone", () => {
+    const opts = makeOpts(1);
+    const pool = createPool(opts);
+    let other: Obj | undefined;
+    pool.borrow((obj) => {
+      pool.release(obj);
+      other = pool.acquire();
+      other.value = 7;
+    });
+    expect(other?.value).toBe(7);
+    expect(pool.alive).toBe(1);
+    expect(pool.available).toBe(0);
+  });
 });

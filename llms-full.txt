@@ -101,6 +101,13 @@ MIT
 
 All notable changes to aipooljs are summarized here.
 
+## [Unreleased]
+
+### Changes
+
+- Fixed: `borrow()` now releases its slot when a `drain()` threw (from `reset()`) before reaching the borrowed object; previously any `drain()` call during the borrow made its `finally` skip `release(obj)`, leaking the slot until the next successful `drain()`. The skip is now decided per acquisition: each `acquire()` stores a fresh token in the alive map, and `borrow()` releases only while its own token is still there.
+- Changed: because that check is per acquisition, a `fn` that calls `release(obj)` on its borrowed object no longer makes `borrow()` throw `PoolError` (`foreign or double-released object`) when it finishes; the `finally` skips the release, and it no longer frees the slot of another caller that re-acquired the object in between. A direct double `release()` still throws.
+
 ## [0.6.0] - 2026-09-29
 
 ### Breaking
@@ -202,7 +209,7 @@ MIT
 - `drain()` resets every live object.
 - `dispose()` is idempotent and permanent.
 - `borrow()` throws `PoolError` synchronously, after the disposed check and before `acquire()`, when `fn` is not a function or `signal` lacks `addEventListener` / `removeEventListener`; a `null` or `undefined` signal means no signal.
-- `borrow()` releases in `finally` for sync throw, async rejection, and abort paths.
+- `borrow()` releases in `finally` for sync throw, async rejection, and abort paths. It skips that release, without throwing, when its acquisition no longer holds the slot: `drain()` reclaimed the object, or `fn` released it itself.
 - Misuse and overflow errors are `PoolError`; every message starts with `aipooljs: ` (argument errors read `aipooljs: <subject> must be <constraint>`), and `error.name` equals the class name.
 - Re-entrancy: the pool has no event dispatch and no mailbox. `create()`, `reset()` and function overflow handlers run synchronously inside the pool call and may call back into the same pool; nested calls run immediately and are never queued. A re-entrant `dispose()` makes the in-progress call throw `PoolDisposedError`, and `drain()` skips snapshot entries that a re-entrant `reset()` already released. Separate pools are independent.
 

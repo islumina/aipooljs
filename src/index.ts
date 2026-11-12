@@ -1,7 +1,7 @@
 // aipooljs — fixed-size object pool for hot-path acquire/release patterns.
 //
 // v0.1.0: full implementation of the frozen API surface. Stack-backed
-// available set, Set-tracked alive objects, double-release detection,
+// available set, Map-tracked alive objects, double-release detection,
 // idempotent dispose, destructurable methods (no `this`).
 //
 // v0.3.0: additive additions —
@@ -136,7 +136,10 @@ export interface Pool<T> {
    *
    * **Invariants:**
    * 1. `release(obj)` is guaranteed to run in `finally` — on sync throw,
-   *    async reject, or abort — unless `drain()` already reclaimed it (INV8).
+   *    async reject, or abort — unless this acquisition no longer holds the
+   *    slot: `drain()` already reclaimed it (INV8), or `fn` released the
+   *    object itself. The `finally` then skips the release; it does not throw
+   *    a double-release `PoolError`.
    * 2. If `opts.signal` is aborted before or during `fn`, `borrow` rejects
    *    with `signal.reason` (default: `AbortError` DOMException). If the
    *    signal is already aborted before `borrow` is called, the promise
@@ -166,10 +169,12 @@ export interface Pool<T> {
    *    returned or threw. The caller will always see a `PoolDisposedError` in
    *    this race, regardless of `fn`'s outcome. This is an explicit invariant:
    *    do not dispose a pool that has active borrows.
-   * 8. **Drain-during-borrow:** `drain()` reclaims the borrowed object too, so
-   *    the `finally` block then skips `release(obj)` — it neither throws nor
+   * 8. **Drain-during-borrow:** once `drain()` reclaims the borrowed object
+   *    itself, the `finally` block skips `release(obj)` — it neither throws nor
    *    resets/frees the object if another caller has since acquired it. `fn`
-   *    must treat the object as invalid after `drain()`, as with INV6.
+   *    must treat the object as invalid after `drain()`, as with INV6. A
+   *    `drain()` that threw (from `reset()`) before reaching the borrowed
+   *    object did not reclaim it, so `release(obj)` still runs.
    * 9. **Argument validation:** after the INV4 check and before `acquire`, a
    *    `fn` that is not a function, or an `opts.signal` without
    *    `addEventListener` / `removeEventListener`, throws `PoolError`
@@ -334,9 +339,10 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   }
 
   let capacity = size;
-  const alive: Set<T> = new Set();
+  // alive object -> fresh token per acquisition; lets borrow() tell whether its
+  // own acquisition still holds the slot (drain() reclaims objects one by one).
+  const alive: Map<T, object> = new Map();
   let disposed = false;
-  let epoch = 0; // bumped by drain(); lets borrow() see its slot was reclaimed
 
   function ck(): void {
     if (disposed) throw new PoolDisposedError("aipooljs: pool has been disposed");
@@ -346,7 +352,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
   // the handler check reject them), so pop() always yields a T.
   function take(): T {
     const obj = avail.pop() as T;
-    alive.add(obj);
+    alive.set(obj, {});
     return obj;
   }
 
@@ -372,7 +378,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     ck(); // re-check: the handler may have disposed the pool re-entrantly
     if (obj == null) bad("overflow handler returned null or undefined");
     if (avail.includes(obj)) bad("overflow handler returned an available object");
-    alive.add(obj);
+    alive.set(obj, {});
     return obj;
   }
 
@@ -386,8 +392,7 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
 
   function drain(): void {
     ck();
-    epoch++;
-    for (const obj of [...alive]) {
+    for (const obj of [...alive.keys()]) {
       // Skip entries a re-entrant reset() already released (no double reset/push).
       if (!alive.delete(obj)) continue;
       reset(obj);
@@ -433,13 +438,14 @@ export function createPool<T>(opts: PoolOptions<T>): Pool<T> | NullPool<T> {
     const obj = acquire();
     if (obj == null) bad("pool exhausted"); // INV5: 'null' mode full → sync throw
 
-    // INV-once latch: `ep` is the drain epoch at acquire, decremented once released,
-    // so release runs at most once (abort + inner-settle) and never after drain()
-    // has reclaimed obj (INV8). The ck() keeps INV7 when drain() preceded dispose().
-    let ep = epoch;
+    // INV-once latch: `tk` is this acquisition's alive token. Releasing, or drain()
+    // reclaiming obj itself, drops it (a re-acquire gets a new one), so release runs
+    // at most once (abort + inner-settle) and never after drain() reached obj
+    // (INV8), while a drain() that threw before reaching obj leaves it matching.
+    // The ck() keeps INV7 when drain() preceded dispose().
+    const tk = alive.get(obj);
     const ro = (): void => {
-      if (ep === epoch) {
-        ep--; // epoch only grows, so ep never matches again
+      if (alive.get(obj) === tk) {
         release(obj);
       } else ck();
     };
