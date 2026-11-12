@@ -1,7 +1,7 @@
 import * as fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
-import { PoolError, createPool } from "../src/index.js";
+import { createPool, PoolError } from "../src/index.js";
 
 // ---------------------------------------------------------------------------
 // P. Property-based invariant tests (fast-check)
