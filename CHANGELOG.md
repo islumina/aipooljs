@@ -2,6 +2,13 @@
 
 All notable changes to aipooljs are summarized here.
 
+## [Unreleased]
+
+### Changes
+
+- Fixed: `borrow()` now releases its slot when a `drain()` threw (from `reset()`) before reaching the borrowed object; previously any `drain()` call during the borrow made its `finally` skip `release(obj)`, leaking the slot until the next successful `drain()`. The skip is now decided per acquisition: each `acquire()` stores a fresh token in the alive map, and `borrow()` releases only while its own token is still there.
+- Changed: because that check is per acquisition, a `fn` that calls `release(obj)` on its borrowed object no longer makes `borrow()` throw `PoolError` (`foreign or double-released object`) when it finishes; the `finally` skips the release, and it no longer frees the slot of another caller that re-acquired the object in between. A direct double `release()` still throws.
+
 ## [0.6.0] - 2026-09-29
 
 ### Breaking
